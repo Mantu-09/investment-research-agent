@@ -18,13 +18,22 @@ import { fetchNewsFindings } from "../tools/newsFindings";
 // If insufficient and iterationCount < 3, loops back to research.
 // ---------------------------------------------------------------------------
 
-// ── LLM instance ───────────────────────────────────────────────────────────
+// ── LLM instance (lazy) ────────────────────────────────────────────────────
+// Instantiated on first call, NOT at module load time.
+// This prevents next build from crashing when GROQ_API_KEY is not in the
+// build environment — the key is only required at request time.
 
-const llm = new ChatGroq({
-  model: "llama-3.3-70b-versatile",
-  temperature: 0.1,
-  maxTokens: 4096,
-});
+let _llm: ChatGroq | null = null;
+function getLLM(): ChatGroq {
+  if (!_llm) {
+    _llm = new ChatGroq({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.1,
+      maxTokens: 4096,
+    });
+  }
+  return _llm;
+}
 
 // ── Zod schema for the investment decision ─────────────────────────────────
 
@@ -218,7 +227,7 @@ const shouldContinueResearch = async (
   const newsSnippet = state.newsFindings.join("\n").slice(0, 2000);
 
   try {
-    const result = await llm.invoke([
+    const result = await getLLM().invoke([
       new SystemMessage(
         `You are a research quality assessor for an investment research agent.
 Your job is to determine whether we have gathered ENOUGH information to make a well-reasoned investment recommendation for a company.
@@ -294,7 +303,7 @@ const analyzeNode = async (
     : "No financial data available (company may be private).";
 
   try {
-    const result = await llm.invoke([
+    const result = await getLLM().invoke([
       new SystemMessage(
         `You are a senior investment analyst. Your task is to produce a thorough, evidence-based analysis of a company based ONLY on the research data provided below.
 
@@ -421,7 +430,7 @@ ${retryHint ? `\n\n=== RETRY NOTE ===\n${retryHint}` : ""}`
         ),
       ];
 
-      const result = await llm.invoke(messages);
+      const result = await getLLM().invoke(messages);
       const rawContent = typeof result.content === "string"
         ? result.content
         : String(result.content);
