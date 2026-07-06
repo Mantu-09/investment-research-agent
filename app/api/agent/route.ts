@@ -1,8 +1,8 @@
-// API route placeholder for agent invocation
-// Will handle POST requests to run the investment research agent
+// Legacy placeholder — actual agent endpoint is at /api/research
+import { NextResponse } from "next/server";
 
-import { NextRequest, NextResponse } from 'next/server';
-
-export async function POST(req: NextRequest) {
-  return NextResponse.json({ message: 'Agent API route - coming soon' });
+export async function POST() {
+  return NextResponse.json({
+    message: "Use POST /api/research instead.",
+  });
 }
