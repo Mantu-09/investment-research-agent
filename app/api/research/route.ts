@@ -20,6 +20,9 @@ export const runtime = "nodejs";
 // Disable response caching
 export const dynamic = "force-dynamic";
 
+// Cap streaming request at 120 seconds to prevent runaway hangs
+export const maxDuration = 120;
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface ResearchResult {

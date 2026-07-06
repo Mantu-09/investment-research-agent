@@ -5,6 +5,8 @@
 // from Alpha Vantage. Handles private/unlisted companies gracefully.
 // ---------------------------------------------------------------------------
 
+import { fetchWithRetry, sleep } from "../utils/retry";
+
 /** Core financial metrics extracted from Alpha Vantage OVERVIEW */
 export interface CompanyOverview {
   symbol: string;
@@ -93,7 +95,11 @@ async function avFetch(
   }
 
   try {
-    const response = await fetch(url.toString());
+    const response = await fetchWithRetry(
+      url.toString(),
+      undefined,
+      { maxRetries: 2, baseDelayMs: 2000 }
+    );
 
     if (!response.ok) {
       return {
@@ -104,7 +110,7 @@ async function avFetch(
 
     const data = (await response.json()) as Record<string, unknown>;
 
-    // Alpha Vantage returns rate-limit messages inside valid JSON
+    // Alpha Vantage returns rate-limit messages inside valid 200 JSON
     if (data["Note"] || data["Information"]) {
       const message =
         (data["Note"] as string) || (data["Information"] as string);
@@ -112,6 +118,8 @@ async function avFetch(
         message.includes("rate limit") ||
         message.includes("call frequency")
       ) {
+        // Wait and return gracefully — Alpha Vantage free tier is very limited
+        await sleep(2000);
         return { data: null, error: `Alpha Vantage rate limit: ${message}` };
       }
     }

@@ -243,7 +243,7 @@ function DecisionCard({ decision, companyName }: { decision: InvestmentDecision;
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
           <div>
             <p className="text-xs text-slate-500 font-medium uppercase tracking-widest mb-1">Investment Decision</p>
-            <h2 className="text-xl font-bold text-white">{companyName}</h2>
+            <h2 className="text-xl font-bold text-white truncate max-w-[420px]" title={companyName}>{companyName}</h2>
           </div>
           <VerdictBadge verdict={decision.verdict} />
         </div>
@@ -433,6 +433,17 @@ export default function Home() {
             }
           }
         }
+
+        // Fallback: if the stream ended without a "complete" or "error" event,
+        // transition to an error state so the user isn't stuck in loading.
+        setAppState((prev) => {
+          if (prev === "loading") {
+            markLastDone();
+            setErrorMsg("The research stream ended unexpectedly. Please try again.");
+            return "error";
+          }
+          return prev;
+        });
 
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
@@ -633,16 +644,62 @@ export default function Home() {
             </div>
           </div>
         )}
+        {/* ── Loading skeleton — shows card-shaped preview while waiting ── */}
+        {isLoading && (
+          <div className="space-y-4 mb-8 animate-fade-up">
+            {/* Decision skeleton */}
+            <div className="rounded-2xl border border-slate-700/30 bg-slate-800/30 p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <div>
+                  <div className="h-3 w-24 rounded shimmer mb-2" />
+                  <div className="h-6 w-48 rounded shimmer" />
+                </div>
+                <div className="h-8 w-28 rounded-full shimmer" />
+              </div>
+              <div className="h-1.5 rounded-full shimmer mb-6 w-full" />
+              <div className="space-y-2">
+                <div className="h-3 w-20 rounded shimmer mb-1" />
+                <div className="h-4 w-full rounded shimmer" />
+                <div className="h-4 w-5/6 rounded shimmer" />
+                <div className="h-4 w-3/4 rounded shimmer" />
+              </div>
+            </div>
+            {/* Analysis skeleton */}
+            <div className="rounded-2xl border border-slate-700/30 bg-slate-800/30 p-6">
+              <div className="h-3 w-32 rounded shimmer mb-4" />
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded shimmer" />
+                <div className="h-4 w-11/12 rounded shimmer" />
+                <div className="h-4 w-5/6 rounded shimmer" />
+                <div className="h-4 w-full rounded shimmer" />
+                <div className="h-4 w-3/4 rounded shimmer" />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Results ── */}
         {isComplete && result && (
           <div className="space-y-6">
-            {/* Decision card */}
-            {result.decision && (
+            {/* Decision card — or fallback if no decision was generated */}
+            {result.decision ? (
               <DecisionCard
                 decision={result.decision}
                 companyName={result.companyName}
               />
+            ) : (
+              <div className="animate-fade-up rounded-2xl border border-amber-800/30 bg-amber-900/10 px-6 py-5">
+                <div className="flex items-start gap-3">
+                  <span className="text-amber-400 text-lg mt-0.5">⚠</span>
+                  <div>
+                    <p className="text-sm font-semibold text-amber-300 mb-1">No decision generated</p>
+                    <p className="text-sm text-amber-400/80 leading-relaxed">
+                      The research agent was unable to produce a structured investment decision for <strong className="text-amber-300">{result.companyName}</strong>.
+                      This can happen when insufficient data is available or API limits are hit.
+                    </p>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* Analysis card */}

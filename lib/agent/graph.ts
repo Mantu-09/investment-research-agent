@@ -7,6 +7,7 @@ import { AgentState, type AgentStateType, type InvestmentDecision } from "./stat
 import { webResearch } from "../tools/webResearch";
 import { fetchFinancialData } from "../tools/financialData";
 import { fetchNewsFindings } from "../tools/newsFindings";
+import { withRetry } from "../utils/retry";
 
 // ---------------------------------------------------------------------------
 // Investment Research Agent — Graph Definition (Phase 3)
@@ -56,11 +57,28 @@ function extractJSON(text: string): string {
   const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   if (fenceMatch) return fenceMatch[1].trim();
 
-  // Try to find raw JSON object
+  // Try to find raw JSON object — use a balanced brace approach
   const braceMatch = text.match(/\{[\s\S]*\}/);
   if (braceMatch) return braceMatch[0].trim();
 
   return text.trim();
+}
+
+/**
+ * Wraps getLLM().invoke() with retry logic for Groq rate limits.
+ * Groq free tier: 30 req/min, 6000 tokens/min.
+ */
+async function invokeLLM(
+  messages: (SystemMessage | HumanMessage)[]
+): Promise<string> {
+  const result = await withRetry(
+    async () => {
+      const res = await getLLM().invoke(messages);
+      return typeof res.content === "string" ? res.content : String(res.content);
+    },
+    { maxRetries: 2, baseDelayMs: 2000, maxDelayMs: 15000 }
+  );
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -227,7 +245,7 @@ const shouldContinueResearch = async (
   const newsSnippet = state.newsFindings.join("\n").slice(0, 2000);
 
   try {
-    const result = await getLLM().invoke([
+    const response = await invokeLLM([
       new SystemMessage(
         `You are a research quality assessor for an investment research agent.
 Your job is to determine whether we have gathered ENOUGH information to make a well-reasoned investment recommendation for a company.
@@ -260,10 +278,6 @@ Financial Data Available: ${state.financialData ? "Yes" : "No"}
 Is there enough data to make a well-reasoned investment recommendation?`
       ),
     ]);
-
-    const response = typeof result.content === "string"
-      ? result.content
-      : String(result.content);
 
     console.log(`[Sufficiency] LLM response: ${response.trim()}`);
 
@@ -303,14 +317,16 @@ const analyzeNode = async (
     : "No financial data available (company may be private).";
 
   try {
-    const result = await getLLM().invoke([
+    const analysis = await invokeLLM([
       new SystemMessage(
         `You are a senior investment analyst. Your task is to produce a thorough, evidence-based analysis of a company based ONLY on the research data provided below.
 
 CRITICAL RULES:
 - Base every claim on specific evidence from the research notes — cite which finding you are referencing.
 - Do NOT invent or assume facts not present in the data.
-- If data is missing or uncertain, explicitly say so.
+- Do NOT fabricate financial figures. ONLY use numbers that appear verbatim in the FINANCIAL DATA section below.
+- If data is missing or uncertain, explicitly say "Data not available" — never guess.
+- If financial data is null/empty, state "No public financial data was retrieved" and do NOT invent P/E, market cap, or revenue numbers.
 - Be balanced: present both strengths and weaknesses.
 
 Structure your analysis with these exact sections:
@@ -319,7 +335,7 @@ Structure your analysis with these exact sections:
 Describe what the company does, its revenue streams, and value proposition based on the research.
 
 ## Financial Health
-Analyze the financial metrics. Comment on valuation (P/E), profitability (margins), growth (revenue trends), and balance sheet health. If the company is private, note the absence of public financial data.
+Analyze the financial metrics. Comment on valuation (P/E), profitability (margins), growth (revenue trends), and balance sheet health. If the company is private OR the financial data section below says "No financial data available", explicitly note that and do NOT invent numbers.
 
 ## Market Position
 Evaluate the company's competitive standing, market share, and key competitors based on the research findings.
@@ -351,10 +367,6 @@ ${financialSnippet}
 Please produce your structured analysis now.`
       ),
     ]);
-
-    const analysis = typeof result.content === "string"
-      ? result.content
-      : String(result.content);
 
     console.log("[Analyze] Analysis complete.");
     return { analysis };
@@ -430,10 +442,7 @@ ${retryHint ? `\n\n=== RETRY NOTE ===\n${retryHint}` : ""}`
         ),
       ];
 
-      const result = await getLLM().invoke(messages);
-      const rawContent = typeof result.content === "string"
-        ? result.content
-        : String(result.content);
+      const rawContent = await invokeLLM(messages);
 
       const jsonStr = extractJSON(rawContent);
       const parsed = JSON.parse(jsonStr);

@@ -6,6 +6,8 @@
 // Returns structured, categorised findings for the analysis node.
 // ---------------------------------------------------------------------------
 
+import { fetchWithRetry } from "../utils/retry";
+
 /** A single red-flag finding */
 export interface RedFlagItem {
   title: string;
@@ -63,19 +65,23 @@ async function tavilySearch(
   }
 
   try {
-    const response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    const response = await fetchWithRetry(
+      "https://api.tavily.com/search",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          query,
+          max_results: maxResults,
+          include_answer: true,
+          search_depth: "advanced",
+        }),
       },
-      body: JSON.stringify({
-        query,
-        max_results: maxResults,
-        include_answer: true,
-        search_depth: "advanced",
-      }),
-    });
+      { maxRetries: 2, baseDelayMs: 1500 }
+    );
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "Unknown error");
