@@ -20,8 +20,63 @@ export const runtime = "nodejs";
 // Disable response caching
 export const dynamic = "force-dynamic";
 
-// Cap streaming request at 120 seconds to prevent runaway hangs
-export const maxDuration = 120;
+// Cap streaming request at 60 seconds (Vercel Hobby plan limit)
+export const maxDuration = 60;
+
+// ── Per-IP rate limiting ───────────────────────────────────────────────────
+// Simple in-memory sliding-window limiter: 5 requests per IP per 10 minutes.
+//
+// NOTE: Best-effort for demo deployments only. Because this runs in a
+// serverless environment, the Map resets on every cold start, so limits are
+// not perfectly enforced across multiple function instances. Good enough to
+// prevent a single user accidentally exhausting the Groq / Tavily /
+// Alpha Vantage free-tier quotas on a shared demo link. For production use,
+// replace with a persistent store (e.g. Upstash Redis).
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_MAX = 5;               // max requests
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // per 10 minutes
+
+/** Maps IP address → array of request timestamps within the current window */
+const ipRequestLog = new Map<string, number[]>();
+
+/**
+ * Returns true if the IP has exceeded the rate limit.
+ * Automatically prunes timestamps older than the window.
+ */
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+  // Get or initialise the request log for this IP
+  const timestamps = (ipRequestLog.get(ip) ?? []).filter(
+    (t) => t > windowStart
+  );
+
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    // Update the pruned list but don't add the new request
+    ipRequestLog.set(ip, timestamps);
+    return true;
+  }
+
+  // Record this request and update the map
+  timestamps.push(now);
+  ipRequestLog.set(ip, timestamps);
+  return false;
+}
+
+/**
+ * Extracts the client IP from the request.
+ * Prefers X-Forwarded-For (set by Vercel/proxies) with fallback to "unknown".
+ */
+function getClientIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    // X-Forwarded-For can be a comma-separated list; first entry is the client
+    return forwarded.split(",")[0].trim();
+  }
+  return "unknown";
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +198,26 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const { companyName } = validation;
 
-  // ── 2. Set up SSE response stream ─────────────────────────────────────
+  // ── 2. Rate limit check ───────────────────────────────────────────────
+
+  const clientIp = getClientIp(req);
+  if (isRateLimited(clientIp)) {
+    return new Response(
+      formatSSE({
+        type: "error",
+        message: `Rate limit exceeded. You may make ${RATE_LIMIT_MAX} requests per ${RATE_LIMIT_WINDOW_MS / 60000} minutes. Please wait before trying again.`,
+      }),
+      {
+        status: 429,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+        },
+      }
+    );
+  }
+
+  // ── 3. Set up SSE response stream ─────────────────────────────────────
 
   const encoder = new TextEncoder();
 
@@ -186,24 +260,37 @@ export async function POST(req: NextRequest): Promise<Response> {
           for (const [nodeName, update] of Object.entries(
             chunk as Record<string, Record<string, unknown>>
           )) {
-            // Merge updates into our tracking state
+            // ── Merge updates into tracking state ─────────────────────
+            //
+            // IMPORTANT — streamMode "updates" gives us the *partial state
+            // returned by each node*, not the cumulative graph state.
+            // researchNotes/newsFindings use append reducers inside the graph,
+            // so the graph maintains the full list internally — but each chunk
+            // only contains the NEW items added by that node in that iteration.
+            //
+            // To get the final counts right we must OVERWRITE (last-write-wins)
+            // rather than spread-concatenate here, because the graph already
+            // applied the reducer. If we spread, notes from iteration 1 get
+            // counted twice (once when research ran, once when later nodes
+            // echo the same accumulated array back through the update stream).
+            //
+            // For fields where the node emits the complete current list we use
+            // the simple pattern: take the latest non-undefined value.
             if (update.analysis !== undefined) {
               finalAnalysis = update.analysis as string | null;
             }
             if (update.decision !== undefined) {
               finalDecision = update.decision as InvestmentDecision | null;
             }
-            if (Array.isArray(update.researchNotes)) {
-              finalResearchNotes = [
-                ...finalResearchNotes,
-                ...(update.researchNotes as string[]),
-              ];
+            // Use last-write-wins: each research/news node emits ONLY the new
+            // items it added. We accumulate by appending only those new items,
+            // mirroring exactly what the graph state reducer does.
+            if (Array.isArray(update.researchNotes) && update.researchNotes.length > 0) {
+              // Replace entirely — the node that owns this field owns the array
+              finalResearchNotes = update.researchNotes as string[];
             }
-            if (Array.isArray(update.newsFindings)) {
-              finalNewsFindings = [
-                ...finalNewsFindings,
-                ...(update.newsFindings as string[]),
-              ];
+            if (Array.isArray(update.newsFindings) && update.newsFindings.length > 0) {
+              finalNewsFindings = update.newsFindings as string[];
             }
             if (typeof update.iterationCount === "number") {
               finalIterationCount = update.iterationCount;

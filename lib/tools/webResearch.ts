@@ -5,15 +5,43 @@
 // Returns structured summaries with source URLs for downstream analysis.
 // ---------------------------------------------------------------------------
 
-import { fetchWithRetry } from "../utils/retry";
+import { tavilySearch } from "../utils/tavily";
+
+// ---------------------------------------------------------------------------
+// In-memory result cache (TTL: 6 hours)
+// ---------------------------------------------------------------------------
+// NOTE: This is a best-effort cache for demo purposes. Because this app runs
+// in a serverless environment (Vercel), each cold start resets the Map —
+// the cache only benefits repeated calls WITHIN the same warm function
+// instance. It does not persist across deployments or cold starts. A Redis/KV
+// store would be required for true persistence, but this is intentionally
+// kept simple to avoid adding infrastructure dependencies.
+// ---------------------------------------------------------------------------
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number; // Unix timestamp ms
+}
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const webResearchCache = new Map<string, CacheEntry<WebResearchResult>>();
+
+function getCached(key: string): WebResearchResult | null {
+  const entry = webResearchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    webResearchCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCached(key: string, value: WebResearchResult): void {
+  webResearchCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+}
 
 /** A single search result returned by Tavily */
-export interface SearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-  score: number;
-}
+export type SearchResult = import("../utils/tavily").TavilySearchResult;
 
 /** Structured output from the web research tool */
 export interface WebResearchResult {
@@ -31,89 +59,6 @@ export interface WebResearchResult {
   };
   sources: string[];
   errors: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Tavily API helper
-// ---------------------------------------------------------------------------
-
-interface TavilyResponse {
-  results: {
-    title: string;
-    url: string;
-    content: string;
-    score: number;
-  }[];
-  answer?: string;
-}
-
-/**
- * Performs a single Tavily search query.
- * Returns parsed results or an empty array + error message on failure.
- */
-async function tavilySearch(
-  query: string,
-  maxResults: number = 5
-): Promise<{ results: SearchResult[]; answer: string; error?: string }> {
-  const apiKey = process.env.TAVILY_API_KEY;
-
-  if (!apiKey) {
-    return {
-      results: [],
-      answer: "",
-      error: "TAVILY_API_KEY is not set in environment variables",
-    };
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      "https://api.tavily.com/search",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          query,
-          max_results: maxResults,
-          include_answer: true,
-          search_depth: "advanced",
-        }),
-      },
-      { maxRetries: 2, baseDelayMs: 1500 }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "Unknown error");
-      return {
-        results: [],
-        answer: "",
-        error: `Tavily API error (${response.status}): ${errText}`,
-      };
-    }
-
-    const data = (await response.json()) as TavilyResponse;
-
-    const results: SearchResult[] = (data.results || []).map((r) => ({
-      title: r.title || "Untitled",
-      url: r.url || "",
-      snippet: r.content?.slice(0, 500) || "",
-      score: r.score || 0,
-    }));
-
-    return {
-      results,
-      answer: data.answer || "",
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      results: [],
-      answer: "",
-      error: `Tavily request failed: ${message}`,
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,20 +80,36 @@ function summariseResults(results: SearchResult[], fallback: string): string {
 /**
  * Performs three parallel web searches to gather a broad picture of a company:
  *   1. Business overview & model
- *   2. Recent news (2025-2026)
+ *   2. Recent news (current year)
  *   3. Competitors & market position
+ *
+ * Results are cached in-memory for 6 hours per company name (best-effort;
+ * resets on cold starts in serverless environments).
  *
  * Returns structured, typed data — never throws.
  */
 export async function webResearch(
   companyName: string
 ): Promise<WebResearchResult> {
+  // Normalise cache key to lowercase trimmed name
+  const cacheKey = companyName.trim().toLowerCase();
+
+  // Return cached result if available and fresh
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`[webResearch] Cache HIT for "${companyName}" — skipping Tavily calls`);
+    return cached;
+  }
+
   const errors: string[] = [];
+  // Use current year dynamically so queries don't age stale
+  const currentYear = new Date().getFullYear();
+  const prevYear = currentYear - 1;
 
   // Run all three searches in parallel for speed
   const [overviewRes, newsRes, competitorsRes] = await Promise.all([
     tavilySearch(`${companyName} company overview business model`),
-    tavilySearch(`${companyName} recent news 2026`),
+    tavilySearch(`${companyName} recent news ${prevYear} ${currentYear}`),
     tavilySearch(`${companyName} competitors market position`),
   ]);
 
@@ -166,7 +127,7 @@ export async function webResearch(
   ].map((r) => r.url);
   const sources = Array.from(new Set(allUrls)).filter(Boolean);
 
-  return {
+  const result: WebResearchResult = {
     companyOverview: {
       results: overviewRes.results,
       summary:
@@ -197,4 +158,10 @@ export async function webResearch(
     sources,
     errors,
   };
+
+  // Store in cache before returning
+  setCached(cacheKey, result);
+  console.log(`[webResearch] Cache SET for "${companyName}" (TTL: 6h)`);
+
+  return result;
 }

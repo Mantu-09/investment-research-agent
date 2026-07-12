@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,29 +50,61 @@ function parseAnalysisMarkdown(markdown: string): React.ReactNode {
   const elements: React.ReactNode[] = [];
   let key = 0;
 
+  // Buffer for consecutive numbered-list items so they can be wrapped in <ol>
+  let olBuffer: string[] = [];
+
+  const flushOl = () => {
+    if (olBuffer.length === 0) return;
+    elements.push(
+      <ol key={key++} className="list-decimal list-inside space-y-1 text-slate-400 text-sm leading-relaxed mb-3 pl-1">
+        {olBuffer.map((item, i) => (
+          <li key={i} className="leading-relaxed">{item}</li>
+        ))}
+      </ol>
+    );
+    olBuffer = [];
+  };
+
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      flushOl(); // end any open numbered list on blank line
+      continue;
+    }
 
     if (trimmed.startsWith("# ")) {
+      flushOl();
       elements.push(
         <h1 key={key++} className="text-xl font-bold text-white mb-4">
           {trimmed.slice(2)}
         </h1>
       );
     } else if (trimmed.startsWith("## ")) {
+      flushOl();
       elements.push(
         <h2 key={key++} className="text-sm font-bold text-slate-100 mt-6 mb-2 pb-1.5 border-b border-slate-700/60 uppercase tracking-wider">
           {trimmed.slice(3)}
         </h2>
       );
     } else if (trimmed.startsWith("### ")) {
+      flushOl();
       elements.push(
         <h3 key={key++} className="text-sm font-semibold text-slate-200 mt-3 mb-1">
           {trimmed.slice(4)}
         </h3>
       );
+    } else if (trimmed.startsWith("#### ")) {
+      flushOl();
+      elements.push(
+        <h4 key={key++} className="text-xs font-semibold text-slate-300 mt-2 mb-0.5 uppercase tracking-wide">
+          {trimmed.slice(5)}
+        </h4>
+      );
+    } else if (/^\d+\.\s/.test(trimmed)) {
+      // Numbered list item — buffer it; flush as <ol> when sequence ends
+      olBuffer.push(trimmed.replace(/^\d+\.\s/, ""));
     } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      flushOl();
       elements.push(
         <li key={key++} className="flex gap-2 items-start text-slate-400 text-sm leading-relaxed mb-1">
           <span className="text-slate-600 mt-0.5 shrink-0">–</span>
@@ -80,21 +112,34 @@ function parseAnalysisMarkdown(markdown: string): React.ReactNode {
         </li>
       );
     } else if (trimmed.startsWith("*Research iterations")) {
+      flushOl();
       elements.push(
         <p key={key++} className="text-xs text-slate-500 italic mb-3">{trimmed.replace(/\*/g, "")}</p>
       );
     } else if (trimmed.startsWith("---")) {
+      flushOl();
       elements.push(<hr key={key++} className="border-slate-700/50 my-4" />);
     } else if (trimmed.startsWith("**Verdict:")) {
-      // Skip — we show the verdict in the decision card
+      flushOl();
+      // Skip — verdict is shown in the decision card
     } else {
+      flushOl();
+      // Parse inline **bold** markers into <strong> elements
+      const parts = trimmed.split(/\*\*(.*?)\*\*/g);
+      const inlineElements: React.ReactNode[] = parts.map((part, i) =>
+        // Odd-indexed parts were inside ** ** markers — render bold
+        i % 2 === 1 ? <strong key={i} className="text-slate-200 font-semibold">{part}</strong> : part
+      );
       elements.push(
         <p key={key++} className="text-slate-400 text-sm leading-relaxed mb-2">
-          {trimmed.replace(/\*\*(.*?)\*\*/g, (_, t) => t)}
+          {inlineElements}
         </p>
       );
     }
   }
+
+  // Flush any trailing numbered list
+  flushOl();
 
   return <>{elements}</>;
 }
@@ -125,15 +170,23 @@ function ConfidenceBar({ value }: { value: number }) {
                   "bg-rose-500";
 
   return (
-    <div className="mt-2">
+    <div
+      className="mt-2"
+      role="meter"
+      aria-valuenow={value}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={`Confidence score: ${value}%`}
+    >
       <div className="flex justify-between items-center mb-1">
         <span className="text-xs text-slate-500 font-medium uppercase tracking-wide">Confidence</span>
-        <span className="text-sm font-bold text-slate-200">{value}%</span>
+        <span className="text-sm font-bold text-slate-200" aria-hidden="true">{value}%</span>
       </div>
       <div className="h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-1000 ${color}`}
           style={{ width: `${value}%` }}
+          aria-hidden="true"
         />
       </div>
     </div>
@@ -146,11 +199,15 @@ function StepItem({ step, index }: { step: ProgressStep; index: number }) {
 
   return (
     <div
+      role="listitem"
+      aria-label={`${meta.label}: ${step.message}`}
+      aria-live={isActive ? "polite" : undefined}
+      aria-atomic={isActive ? "true" : undefined}
       className="flex items-start gap-3 animate-slide-in"
       style={{ animationDelay: `${index * 60}ms` }}
     >
       {/* Icon / spinner */}
-      <div className="mt-0.5 shrink-0">
+      <div className="mt-0.5 shrink-0" aria-hidden="true">
         {isActive ? (
           <div className="w-5 h-5 rounded-full border-2 border-emerald-500/40 border-t-emerald-400 animate-spin-slow" />
         ) : (
@@ -169,8 +226,8 @@ function StepItem({ step, index }: { step: ProgressStep; index: number }) {
             {meta.icon} {meta.label}
           </span>
           {isActive && (
-            <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-medium" aria-label="Step in progress">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" aria-hidden="true" />
               Live
             </span>
           )}
@@ -179,7 +236,7 @@ function StepItem({ step, index }: { step: ProgressStep; index: number }) {
 
         {/* Extra data badges */}
         {step.data && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
+          <div className="flex flex-wrap gap-1.5 mt-1.5" aria-label="Step details">
             {step.data.iterationCount !== undefined && (
               <span className="px-2 py-0.5 rounded-full text-xs bg-slate-700/50 text-slate-400 border border-slate-600/40">
                 Iteration {String(step.data.iterationCount)}
@@ -209,12 +266,16 @@ function StepItem({ step, index }: { step: ProgressStep; index: number }) {
 function VerdictBadge({ verdict }: { verdict: "invest" | "pass" }) {
   const isInvest = verdict === "invest";
   return (
-    <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold uppercase tracking-widest border ${
-      isInvest
-        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 glow-emerald"
-        : "bg-rose-500/15 text-rose-300 border-rose-500/30 glow-rose"
-    }`}>
-      <span className={`w-2 h-2 rounded-full ${isInvest ? "bg-emerald-400" : "bg-rose-400"} animate-pulse-dot`} />
+    <div
+      role="status"
+      aria-label={`Investment verdict: ${isInvest ? "Invest" : "Pass"}`}
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold uppercase tracking-widest border ${
+        isInvest
+          ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 glow-emerald"
+          : "bg-rose-500/15 text-rose-300 border-rose-500/30 glow-rose"
+      }`}
+    >
+      <span className={`w-2 h-2 rounded-full ${isInvest ? "bg-emerald-400" : "bg-rose-400"} animate-pulse-dot`} aria-hidden="true" />
       {isInvest ? "✓ Invest" : "✕ Pass"}
     </div>
   );
@@ -316,8 +377,28 @@ function AnalysisCard({ analysis }: { analysis: string }) {
     .replace(/---\n?## Investment Decision[\s\S]*/m, "")
     .trim();
 
-  const isLong = cleanedAnalysis.length > 1200;
-  const displayText = isLong && !expanded ? cleanedAnalysis.slice(0, 1200) + "…" : cleanedAnalysis;
+  const PREVIEW_LIMIT = 1200;
+  const isLong = cleanedAnalysis.length > PREVIEW_LIMIT;
+
+  // Find the nearest sentence boundary at or before the limit so we never
+  // clip mid-sentence. Search backwards from the limit for . ! or ?
+  let previewText = cleanedAnalysis;
+  if (isLong && !expanded) {
+    const candidate = cleanedAnalysis.slice(0, PREVIEW_LIMIT);
+    // Find the last sentence-ending punctuation at or before the limit
+    const boundaryIdx = Math.max(
+      candidate.lastIndexOf("."),
+      candidate.lastIndexOf("!"),
+      candidate.lastIndexOf("?")
+    );
+    if (boundaryIdx > PREVIEW_LIMIT * 0.5) {
+      // Good boundary found — cut right after the punctuation mark
+      previewText = cleanedAnalysis.slice(0, boundaryIdx + 1) + "\u2026";
+    } else {
+      // No sentence boundary in the first half — fall back to hard cut
+      previewText = candidate + "\u2026";
+    }
+  }
 
   return (
     <div className="animate-fade-up rounded-2xl border border-slate-700/40 bg-slate-800/30 backdrop-blur-sm overflow-hidden"
@@ -329,7 +410,7 @@ function AnalysisCard({ analysis }: { analysis: string }) {
       </div>
       <div className="px-6 py-5">
         <div className="prose-analysis">
-          {parseAnalysisMarkdown(displayText)}
+          {parseAnalysisMarkdown(previewText)}
         </div>
         {isLong && (
           <button
@@ -354,6 +435,13 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const stepCounterRef = useRef(0);
+
+  // Abort any in-flight SSE stream when the component unmounts
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const addStep = useCallback((step: string, message: string, data?: Record<string, unknown>) => {
     const id = `step-${stepCounterRef.current++}-${step}`;
@@ -618,7 +706,11 @@ export default function Home() {
             </div>
 
             {/* Steps list */}
-            <div className="p-5 space-y-4">
+            <div
+              className="p-5 space-y-4"
+              role="list"
+              aria-label="Research progress steps"
+            >
               {steps.map((step, i) => (
                 <StepItem key={step.id} step={step} index={i} />
               ))}

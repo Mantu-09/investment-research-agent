@@ -7,6 +7,42 @@
 
 import { fetchWithRetry, sleep } from "../utils/retry";
 
+// ---------------------------------------------------------------------------
+// In-memory result cache (TTL: 6 hours)
+// ---------------------------------------------------------------------------
+// NOTE: This is a best-effort cache for demo purposes. Because this app runs
+// in a serverless environment (Vercel), each cold start resets the Map —
+// the cache only benefits repeated calls WITHIN the same warm function
+// instance. It does not persist across deployments or cold starts. A Redis/KV
+// store would be required for true persistence, but this is intentionally
+// kept simple to avoid adding infrastructure dependencies.
+// ---------------------------------------------------------------------------
+
+interface FinancialCacheEntry {
+  value: FinancialDataResult;
+  expiresAt: number; // Unix timestamp ms
+}
+
+const FINANCIAL_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const financialDataCache = new Map<string, FinancialCacheEntry>();
+
+function getFinancialCached(key: string): FinancialDataResult | null {
+  const entry = financialDataCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    financialDataCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setFinancialCached(key: string, value: FinancialDataResult): void {
+  financialDataCache.set(key, {
+    value,
+    expiresAt: Date.now() + FINANCIAL_CACHE_TTL_MS,
+  });
+}
+
 /** Core financial metrics extracted from Alpha Vantage OVERVIEW */
 export interface CompanyOverview {
   symbol: string;
@@ -187,26 +223,100 @@ function parseQuote(raw: Record<string, unknown>): StockQuote | null {
 }
 
 // ---------------------------------------------------------------------------
+// Ticker Resolution via SYMBOL_SEARCH
+// ---------------------------------------------------------------------------
+
+interface SymbolMatch {
+  symbol: string;
+  name: string;
+  type: string;
+  region: string;
+  matchScore: number;
+}
+
+/**
+ * Resolves a company name or partial ticker to the best-matching stock
+ * symbol using Alpha Vantage's SYMBOL_SEARCH endpoint.
+ *
+ * Returns the best match if the matchScore >= 0.5, otherwise null.
+ */
+async function resolveTickerSymbol(
+  companyNameOrTicker: string
+): Promise<{ match: SymbolMatch | null; error?: string }> {
+  const res = await avFetch({
+    function: "SYMBOL_SEARCH",
+    keywords: companyNameOrTicker,
+  });
+
+  if (res.error) {
+    return { match: null, error: res.error };
+  }
+
+  if (!res.data) {
+    return { match: null, error: "No response from SYMBOL_SEARCH" };
+  }
+
+  const bestMatches = res.data["bestMatches"] as
+    | Record<string, string>[]
+    | undefined;
+
+  if (!bestMatches || bestMatches.length === 0) {
+    return { match: null };
+  }
+
+  // Parse the first (best) match
+  const best = bestMatches[0];
+  const matchScore = safeParseNumber(best["9. matchScore"]) ?? 0;
+
+  const match: SymbolMatch = {
+    symbol: (best["1. symbol"] || "").trim(),
+    name: (best["2. name"] || "").trim(),
+    type: (best["3. type"] || "").trim(),
+    region: (best["4. region"] || "").trim(),
+    matchScore,
+  };
+
+  // Only accept confident matches (score >= 0.5)
+  if (match.symbol && match.matchScore >= 0.5) {
+    console.log(
+      `[Ticker Resolution] "${companyNameOrTicker}" → ${match.symbol} ` +
+        `(${match.name}, score: ${match.matchScore})`
+    );
+    return { match };
+  }
+
+  console.log(
+    `[Ticker Resolution] No confident match for "${companyNameOrTicker}" ` +
+      `(best: ${match.symbol}, score: ${match.matchScore})`
+  );
+  return { match: null };
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
 /**
  * Fetches financial data for a company from Alpha Vantage.
  *
- * @param ticker  Stock ticker symbol (e.g. "AAPL", "GOOGL")
- *                If empty or undefined, the company is treated as private.
+ * @param companyNameOrTicker  A company name (e.g. "Apple", "Microsoft") or
+ *                             stock ticker symbol (e.g. "AAPL", "MSFT").
+ *                             The function will first attempt to resolve the
+ *                             input to a ticker via SYMBOL_SEARCH.
+ *                             If empty or undefined, the company is treated
+ *                             as private.
  *
  * Returns structured financial data — never throws.
  * If the company is private/unlisted, returns null data with a note.
  */
 export async function fetchFinancialData(
-  ticker: string | undefined
+  companyNameOrTicker: string | undefined
 ): Promise<FinancialDataResult> {
   const errors: string[] = [];
   const sources: string[] = [];
 
   // Handle private / unlisted companies
-  if (!ticker || ticker.trim() === "") {
+  if (!companyNameOrTicker || companyNameOrTicker.trim() === "") {
     return {
       overview: null,
       quote: null,
@@ -217,12 +327,42 @@ export async function fetchFinancialData(
     };
   }
 
-  const cleanTicker = ticker.trim().toUpperCase();
+  // Return cached result if available and fresh
+  const cacheKey = companyNameOrTicker.trim().toLowerCase();
+  const cached = getFinancialCached(cacheKey);
+  if (cached) {
+    console.log(`[fetchFinancialData] Cache HIT for "${companyNameOrTicker}" — skipping Alpha Vantage calls`);
+    return cached;
+  }
 
-  // Fetch OVERVIEW and GLOBAL_QUOTE in parallel
+  // ── Step 1: Resolve company name to ticker symbol ────────────────────
+  const { match: tickerMatch, error: searchError } = await resolveTickerSymbol(
+    companyNameOrTicker.trim()
+  );
+
+  if (searchError) {
+    errors.push(`Ticker resolution: ${searchError}`);
+  }
+
+  if (!tickerMatch) {
+    // No confident match — treat as private / unlisted
+    return {
+      overview: null,
+      quote: null,
+      isPubliclyTraded: false,
+      note: `Could not resolve "${companyNameOrTicker}" to a public stock ticker. The company may be private, or the name may not match any listed security.`,
+      sources: [],
+      errors,
+    };
+  }
+
+  const resolvedSymbol = tickerMatch.symbol;
+  sources.push(`Alpha Vantage SYMBOL_SEARCH (resolved "${companyNameOrTicker}" → ${resolvedSymbol})`);
+
+  // ── Step 2: Fetch OVERVIEW and GLOBAL_QUOTE in parallel ──────────────
   const [overviewRes, quoteRes] = await Promise.all([
-    avFetch({ function: "OVERVIEW", symbol: cleanTicker }),
-    avFetch({ function: "GLOBAL_QUOTE", symbol: cleanTicker }),
+    avFetch({ function: "OVERVIEW", symbol: resolvedSymbol }),
+    avFetch({ function: "GLOBAL_QUOTE", symbol: resolvedSymbol }),
   ]);
 
   // Parse overview
@@ -233,11 +373,11 @@ export async function fetchFinancialData(
     overview = parseOverview(overviewRes.data);
     if (!overview) {
       errors.push(
-        `No overview data returned for ticker "${cleanTicker}" — it may be delisted or invalid.`
+        `No overview data returned for ticker "${resolvedSymbol}" — it may be delisted or invalid.`
       );
     } else {
       sources.push(
-        `Alpha Vantage OVERVIEW (${cleanTicker})`
+        `Alpha Vantage OVERVIEW (${resolvedSymbol})`
       );
     }
   }
@@ -250,11 +390,11 @@ export async function fetchFinancialData(
     quote = parseQuote(quoteRes.data);
     if (!quote) {
       errors.push(
-        `No quote data returned for ticker "${cleanTicker}".`
+        `No quote data returned for ticker "${resolvedSymbol}".`
       );
     } else {
       sources.push(
-        `Alpha Vantage GLOBAL_QUOTE (${cleanTicker})`
+        `Alpha Vantage GLOBAL_QUOTE (${resolvedSymbol})`
       );
     }
   }
@@ -263,14 +403,14 @@ export async function fetchFinancialData(
 
   let note = "";
   if (!isPubliclyTraded) {
-    note = `Ticker "${cleanTicker}" did not return valid data. The company may be private, delisted, or the ticker may be incorrect.`;
+    note = `Ticker "${resolvedSymbol}" (resolved from "${companyNameOrTicker}") did not return valid data. The company may be private, delisted, or the ticker may be incorrect.`;
   } else if (errors.length > 0) {
-    note = `Partial data retrieved for ${cleanTicker}. Some API calls had errors.`;
+    note = `Partial data retrieved for ${resolvedSymbol}. Some API calls had errors.`;
   } else {
-    note = `Full financial data retrieved for ${cleanTicker}.`;
+    note = `Full financial data retrieved for ${resolvedSymbol} (resolved from "${companyNameOrTicker}").`;
   }
 
-  return {
+  const result: FinancialDataResult = {
     overview,
     quote,
     isPubliclyTraded,
@@ -278,4 +418,10 @@ export async function fetchFinancialData(
     sources,
     errors,
   };
+
+  // Store in cache before returning
+  setFinancialCached(cacheKey, result);
+  console.log(`[fetchFinancialData] Cache SET for "${companyNameOrTicker}" (TTL: 6h)`);
+
+  return result;
 }

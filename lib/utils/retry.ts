@@ -73,10 +73,13 @@ export async function withRetry<T>(
       }
 
       if (attempt < opts.maxRetries) {
-        const delay = Math.min(
+        const baseDelay = Math.min(
           opts.baseDelayMs * Math.pow(opts.backoffMultiplier, attempt),
           opts.maxDelayMs
         );
+        // Add ±25% jitter to prevent thundering herd when multiple requests retry simultaneously
+        const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
+        const delay = Math.max(0, Math.round(baseDelay + jitter));
         console.warn(
           `[Retry] Attempt ${attempt + 1}/${opts.maxRetries} failed (${lastError.message}). ` +
             `Retrying in ${delay}ms...`

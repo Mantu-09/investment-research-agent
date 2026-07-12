@@ -1,7 +1,7 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { ChatGroq } from "@langchain/groq";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { z, safeParse } from "zod";
+import { z } from "zod";
 
 import { AgentState, type AgentStateType, type InvestmentDecision } from "./state";
 import { webResearch } from "../tools/webResearch";
@@ -261,7 +261,7 @@ SUFFICIENT: yes|no — <brief one-line reason>
 
 Examples:
 SUFFICIENT: yes — We have business model, financials, news, and competitor data.
-SUFFICIENT: no — Missing competitive landscape data. Try searching for "{companyName} competitors market share 2026".`
+SUFFICIENT: no — Missing competitive landscape data. Try searching for "${state.companyName} competitors market share 2026".`
       ),
       new HumanMessage(
         `Company: ${state.companyName}
@@ -446,7 +446,7 @@ ${retryHint ? `\n\n=== RETRY NOTE ===\n${retryHint}` : ""}`
 
       const jsonStr = extractJSON(rawContent);
       const parsed = JSON.parse(jsonStr);
-      const validated = safeParse(DecisionSchema, parsed);
+      const validated = DecisionSchema.safeParse(parsed);
 
       if (validated.success) {
         return validated.data as InvestmentDecision;

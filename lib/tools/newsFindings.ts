@@ -6,15 +6,44 @@
 // Returns structured, categorised findings for the analysis node.
 // ---------------------------------------------------------------------------
 
-import { fetchWithRetry } from "../utils/retry";
+import { tavilySearch } from "../utils/tavily";
+import type { TavilySearchResult } from "../utils/tavily";
+
+// ---------------------------------------------------------------------------
+// In-memory result cache (TTL: 6 hours)
+// ---------------------------------------------------------------------------
+// NOTE: This is a best-effort cache for demo purposes. Because this app runs
+// in a serverless environment (Vercel), each cold start resets the Map —
+// the cache only benefits repeated calls WITHIN the same warm function
+// instance. It does not persist across deployments or cold starts. A Redis/KV
+// store would be required for true persistence, but this is intentionally
+// kept simple to avoid adding infrastructure dependencies.
+// ---------------------------------------------------------------------------
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number; // Unix timestamp ms
+}
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const newsFindingsCache = new Map<string, CacheEntry<NewsFindingsResult>>();
+
+function getCached(key: string): NewsFindingsResult | null {
+  const entry = newsFindingsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    newsFindingsCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCached(key: string, value: NewsFindingsResult): void {
+  newsFindingsCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+}
 
 /** A single red-flag finding */
-export interface RedFlagItem {
-  title: string;
-  url: string;
-  snippet: string;
-  score: number;
-}
+export type RedFlagItem = TavilySearchResult;
 
 /** Categories of risk signals */
 export interface RedFlagCategory {
@@ -32,87 +61,6 @@ export interface NewsFindingsResult {
   overallRiskLevel: "low" | "medium" | "high";
   sources: string[];
   errors: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Tavily search helper (shared pattern with webResearch.ts)
-// ---------------------------------------------------------------------------
-
-interface TavilyResult {
-  title: string;
-  url: string;
-  content: string;
-  score: number;
-}
-
-interface TavilyResponse {
-  results: TavilyResult[];
-  answer?: string;
-}
-
-async function tavilySearch(
-  query: string,
-  maxResults: number = 5
-): Promise<{ results: RedFlagItem[]; answer: string; error?: string }> {
-  const apiKey = process.env.TAVILY_API_KEY;
-
-  if (!apiKey) {
-    return {
-      results: [],
-      answer: "",
-      error: "TAVILY_API_KEY is not set in environment variables",
-    };
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      "https://api.tavily.com/search",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          query,
-          max_results: maxResults,
-          include_answer: true,
-          search_depth: "advanced",
-        }),
-      },
-      { maxRetries: 2, baseDelayMs: 1500 }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "Unknown error");
-      return {
-        results: [],
-        answer: "",
-        error: `Tavily API error (${response.status}): ${errText}`,
-      };
-    }
-
-    const data = (await response.json()) as TavilyResponse;
-
-    const results: RedFlagItem[] = (data.results || []).map((r) => ({
-      title: r.title || "Untitled",
-      url: r.url || "",
-      snippet: r.content?.slice(0, 500) || "",
-      score: r.score || 0,
-    }));
-
-    return {
-      results,
-      answer: data.answer || "",
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      results: [],
-      answer: "",
-      error: `Tavily request failed: ${message}`,
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,19 +118,37 @@ function assessRiskLevel(
  *   3. Regulatory investigations & compliance issues
  *   4. Executive & leadership changes
  *
+ * Results are cached in-memory for 6 hours per company name (best-effort;
+ * resets on cold starts in serverless environments).
+ *
  * Returns structured, categorised findings — never throws.
  */
 export async function fetchNewsFindings(
   companyName: string
 ): Promise<NewsFindingsResult> {
+  // Normalise cache key to lowercase trimmed name
+  const cacheKey = companyName.trim().toLowerCase();
+
+  // Return cached result if available and fresh
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`[fetchNewsFindings] Cache HIT for "${companyName}" — skipping Tavily calls`);
+    return cached;
+  }
+
   const errors: string[] = [];
 
-  // Define focused search queries
+  // Use current year dynamically so queries don't age stale
+  const currentYear = new Date().getFullYear();
+  const prevYear = currentYear - 1;
+  const yearRange = `${prevYear} ${currentYear}`;
+
+  // Define focused search queries with dynamic year range
   const queries = {
-    lawsuits: `${companyName} lawsuit legal proceedings litigation 2025 2026`,
-    layoffs: `${companyName} layoffs workforce reduction restructuring 2025 2026`,
-    regulatoryIssues: `${companyName} regulatory investigation compliance SEC fine 2025 2026`,
-    leadershipChanges: `${companyName} CEO CFO executive resignation leadership change 2025 2026`,
+    lawsuits: `${companyName} lawsuit legal proceedings litigation ${yearRange}`,
+    layoffs: `${companyName} layoffs workforce reduction restructuring ${yearRange}`,
+    regulatoryIssues: `${companyName} regulatory investigation compliance SEC fine ${yearRange}`,
+    leadershipChanges: `${companyName} CEO CFO executive resignation leadership change ${yearRange}`,
   };
 
   // Run all four searches in parallel
@@ -248,7 +214,7 @@ export async function fetchNewsFindings(
     leadershipChanges,
   ]);
 
-  return {
+  const result: NewsFindingsResult = {
     lawsuits,
     layoffs,
     regulatoryIssues,
@@ -257,4 +223,10 @@ export async function fetchNewsFindings(
     sources,
     errors,
   };
+
+  // Store in cache before returning
+  setCached(cacheKey, result);
+  console.log(`[fetchNewsFindings] Cache SET for "${companyName}" (TTL: 6h)`);
+
+  return result;
 }

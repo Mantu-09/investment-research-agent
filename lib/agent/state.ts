@@ -55,12 +55,6 @@ export const AgentState = Annotation.Root({
   }),
 
   // ── Control flow ──────────────────────────────────────────────────────
-  /** Whether enough data has been gathered to move to analysis */
-  sufficientData: Annotation<boolean>({
-    reducer: (_prev, next) => next,
-    default: () => false,
-  }),
-
   /** Tracks how many research iterations have been executed */
   iterationCount: Annotation<number>({
     reducer: (_prev, next) => next,

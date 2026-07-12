@@ -1,0 +1,79 @@
+{
+  "company": "NVIDIA",
+  "category": "major-public-2",
+  "events": [
+    {
+      "type": "progress",
+      "step": "start",
+      "message": "Starting investment research for \"NVIDIA\"…"
+    },
+    {
+      "type": "progress",
+      "step": "research",
+      "message": "Research iteration 1 complete — 5 data point(s) collected.",
+      "data": {
+        "iterationCount": 1,
+        "notesGathered": 5,
+        "hasFinancialData": true
+      }
+    },
+    {
+      "type": "progress",
+      "step": "analyze",
+      "message": "Analysis complete — synthesising business model, financials, market position and risks.",
+      "data": {
+        "analysisLength": 161
+      }
+    },
+    {
+      "type": "progress",
+      "step": "decide",
+      "message": "Investment decision: PASS (confidence 10%)",
+      "data": {
+        "verdict": "pass",
+        "confidence": 10
+      }
+    },
+    {
+      "type": "progress",
+      "step": "format",
+      "message": "Report formatted and ready."
+    },
+    {
+      "type": "complete",
+      "result": {
+        "companyName": "NVIDIA",
+        "analysis": "# Investment Research Report: NVIDIA\n\n*Research iterations: 1 | Data points: 5 notes, 1 news findings*\n\n---\n\nAnalysis could not be completed due to an LLM error. Raw research notes are available for manual review.\n\nResearch summary: 5 notes gathered, 1 news items found.\n\n---\n\n## Investment Decision\n\n**Verdict: PASS** (Confidence: 10%)\n\n### Reasoning\nUnable to generate a structured decision due to LLM parsing errors. Based on the 5 research notes gathered, a conservative \"pass\" recommendation is issued pending manual review.\n\n### Key Risks\n- Automated analysis could not be completed — manual review required\n- Data quality: 5 research notes, 1 news items gathered\n\n### Sources",
+        "decision": {
+          "verdict": "pass",
+          "confidence": 10,
+          "reasoning": "Unable to generate a structured decision due to LLM parsing errors. Based on the 5 research notes gathered, a conservative \"pass\" recommendation is issued pending manual review.",
+          "keyRisks": [
+            "Automated analysis could not be completed — manual review required",
+            "Data quality: 5 research notes, 1 news items gathered"
+          ],
+          "sources": []
+        },
+        "researchNotes": [
+          "[Web Research - Overview] No overview data found for NVIDIA",
+          "[Web Research - Recent News] No recent news found for NVIDIA",
+          "[Web Research - Competition] No competitive data found for NVIDIA",
+          "[Financial Data - Note] Could not resolve \"NVIDIA\" to a public stock ticker. The company may be private, or the name may not match any listed security.",
+          "[Tool Errors] The following data-gathering errors occurred: Overview search: TAVILY_API_KEY is not set in environment variables; News search: TAVILY_API_KEY is not set in environment variables; Competitors search: TAVILY_API_KEY is not set in environment variables; Ticker resolution: ALPHA_VANTAGE_API_KEY is not set in environment variables; Lawsuits search: TAVILY_API_KEY is not set in environment variables; Layoffs search: TAVILY_API_KEY is not set in environment variables; Regulatory search: TAVILY_API_KEY is not set in environment variables; Leadership search: TAVILY_API_KEY is not set in environment variables"
+        ],
+        "newsFindings": [
+          "[Risk Assessment] Overall risk level: LOW"
+        ],
+        "iterationCount": 1,
+        "financialData": {
+          "overview": null,
+          "quote": null,
+          "isPubliclyTraded": false,
+          "note": "Could not resolve \"NVIDIA\" to a public stock ticker. The company may be private, or the name may not match any listed security.",
+          "sources": [],
+          "riskLevel": "low"
+        }
+      }
+    }
+  ]
+}
