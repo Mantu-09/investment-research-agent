@@ -4,6 +4,13 @@ An **AI-powered due-diligence tool** that researches any company and produces a 
 
 Built with **Next.js 14**, **LangGraph** (stateful agentic graph), **Groq** (LLaMA 3.3 70B), **Tavily** (web search), and **Alpha Vantage** (market data).
 
+**🔗 Live Demo → [investment-research-agent-one.vercel.app](https://investment-research-agent-one.vercel.app/)**
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://investment-research-agent-one.vercel.app/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agentic%20AI-blue?style=for-the-badge)](https://langchain-ai.github.io/langgraph/)
+[![Groq](https://img.shields.io/badge/Groq-LLaMA%203.3%2070B-orange?style=for-the-badge)](https://groq.com/)
+
 ---
 
 ## Table of Contents
