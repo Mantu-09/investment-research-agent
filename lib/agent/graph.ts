@@ -7,7 +7,7 @@ import { AgentState, type AgentStateType, type InvestmentDecision } from "./stat
 import { webResearch } from "../tools/webResearch";
 import { fetchFinancialData } from "../tools/financialData";
 import { fetchNewsFindings } from "../tools/newsFindings";
-import { withRetry } from "../utils/retry";
+import { withRetry, sleep } from "../utils/retry";
 
 // ---------------------------------------------------------------------------
 // Investment Research Agent — Graph Definition (Phase 3)
@@ -65,20 +65,63 @@ function extractJSON(text: string): string {
 }
 
 /**
- * Wraps getLLM().invoke() with retry logic for Groq rate limits.
- * Groq free tier: 30 req/min, 6000 tokens/min.
+ * Wraps getLLM().invoke() with smart retry logic for Groq rate limits.
+ *
+ * KEY FIXES:
+ * 1. Parses "Please try again in Xs" from Groq 429 body → sleeps exactly
+ *    that long instead of guessing. Groq's window is 60 s.
+ * 2. Treats empty/tiny responses as rate-limit errors.
+ * 3. Catches RateLimitError by class name (not just message text).
  */
 async function invokeLLM(
   messages: (SystemMessage | HumanMessage)[]
 ): Promise<string> {
-  const result = await withRetry(
-    async () => {
+  const MAX_ATTEMPTS = 4;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
       const res = await getLLM().invoke(messages);
-      return typeof res.content === "string" ? res.content : String(res.content);
-    },
-    { maxRetries: 2, baseDelayMs: 2000, maxDelayMs: 15000 }
-  );
-  return result;
+      const content =
+        typeof res.content === "string" ? res.content : String(res.content);
+
+      if (!content || content.trim().length < 10) {
+        throw new Error("rate limit: empty response — Groq token budget exhausted");
+      }
+      return content;
+    } catch (err) {
+      const isLast = attempt === MAX_ATTEMPTS;
+      const msg  = err instanceof Error ? err.message : String(err);
+      const name = (err as { name?: string }).name ?? "";
+
+      const isRateLimit =
+        name === "RateLimitError" ||
+        name.toLowerCase().includes("ratelimit") ||
+        msg.includes("429") ||
+        msg.toLowerCase().includes("rate limit") ||
+        msg.toLowerCase().includes("rate_limit") ||
+        msg.toLowerCase().includes("token") ||
+        msg.toLowerCase().includes("overloaded") ||
+        msg.toLowerCase().includes("empty response");
+
+      if (!isRateLimit || isLast) {
+        console.error(`[LLM] Attempt ${attempt} failed (non-retryable or max attempts reached):`, msg.slice(0, 200));
+        throw err;
+      }
+
+      // Parse Groq's "Please try again in 36.32s" for exact wait time.
+      const retryMatch = msg.match(/try again in ([\d.]+)s/i);
+      const waitMs = retryMatch
+        ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000
+        : Math.min(12000 * attempt, 50000);
+
+      console.warn(
+        `[LLM] Attempt ${attempt}/${MAX_ATTEMPTS} rate-limited. ` +
+          `Waiting ${(waitMs / 1000).toFixed(1)}s for Groq token window to reset...`
+      );
+      await sleep(waitMs);
+    }
+  }
+  throw new Error("[LLM] All retry attempts exhausted");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -221,77 +264,82 @@ const researchNode = async (
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Uses the LLM to judge whether accumulated research data is sufficient
- * to make an investment recommendation. Returns "research" to loop or
- * "analyze" to proceed.
+ * Determines whether accumulated research is sufficient to analyse.
+ *
+ * KEY FIX — heuristic-first approach:
+ * Before burning a Groq LLM call on a sufficiency check, we test a cheap
+ * heuristic. If the heuristic passes we skip the LLM call entirely, saving
+ * ~1 000 tokens per iteration and avoiding the token-exhaustion that caused
+ * the analyse / decide nodes to return LLM errors.
+ *
+ * Heuristic: after iteration 1, if we have web-research notes, financial data
+ * (or a confirmed private-company note), AND at least one news finding, the
+ * four required dimensions are covered → proceed immediately.
+ *
+ * Only falls back to LLM judgement when the heuristic cannot confirm coverage.
  */
 const shouldContinueResearch = async (
   state: AgentStateType
 ): Promise<string> => {
   // Hard cap: always proceed after 3 iterations
   if (state.iterationCount >= 3) {
-    console.log("[Sufficiency] Max iterations reached — proceeding to analysis.");
+    console.log("[Sufficiency] Hard cap reached — proceeding to analysis.");
     return "analyze";
   }
 
-  // If we have no research notes at all, definitely need more research
+  // Nothing gathered yet → need at least one iteration
   if (state.researchNotes.length === 0) {
-    console.log("[Sufficiency] No data gathered yet — continuing research.");
+    console.log("[Sufficiency] No data yet — running first research iteration.");
     return "research";
   }
 
-  // Ask the LLM to judge sufficiency
-  const notesSummary = state.researchNotes.join("\n").slice(0, 6000);
-  const newsSnippet = state.newsFindings.join("\n").slice(0, 2000);
+  // ── Cheap heuristic (no LLM call) ────────────────────────────────────────
+  // Check whether all four required dimensions are covered.
+  const hasWebOverview = state.researchNotes.some(
+    (n) => n.startsWith("[Web Research - Overview]")
+  );
+  const hasWebCompetitors = state.researchNotes.some(
+    (n) => n.startsWith("[Web Research - Competition]")
+  );
+  const hasFinancials =
+    state.financialData !== null &&
+    // either real financial data or an explicit private-company note
+    (state.financialData.isPubliclyTraded === true ||
+      (typeof state.financialData.note === "string" &&
+        state.financialData.note.length > 10));
+  const hasNews = state.newsFindings.length >= 1;
+
+  if (hasWebOverview && hasWebCompetitors && hasFinancials && hasNews) {
+    console.log(
+      `[Sufficiency] Heuristic PASS after iteration ${state.iterationCount} — ` +
+        "skipping LLM sufficiency call, proceeding to analysis."
+    );
+    return "analyze";
+  }
+
+  // ── LLM fallback (only when heuristic cannot confirm) ────────────────────
+  // Limit note/news snippets tightly to avoid burning token budget.
+  const notesSummary = state.researchNotes.join("\n").slice(0, 3000);
+  const newsSnippet  = state.newsFindings.join("\n").slice(0, 1000);
 
   try {
     const response = await invokeLLM([
       new SystemMessage(
-        `You are a research quality assessor for an investment research agent.
-Your job is to determine whether we have gathered ENOUGH information to make a well-reasoned investment recommendation for a company.
-
-You need AT LEAST the following to say data is sufficient:
-1. A clear understanding of what the company does (business model)
-2. Some financial metrics OR a clear note that the company is private
-3. Awareness of recent news or confirmation that no significant news exists
-4. Competitive landscape context
-
-Respond with EXACTLY one line in this format:
-SUFFICIENT: yes|no — <brief one-line reason>
-
-Examples:
-SUFFICIENT: yes — We have business model, financials, news, and competitor data.
-SUFFICIENT: no — Missing competitive landscape data. Try searching for "${state.companyName} competitors market share 2026".`
+        `You are a research quality assessor.
+Say whether we have enough data to recommend on ${state.companyName}.
+Need: (1) business model, (2) financial metrics or private-company note, (3) recent news, (4) competitors.
+Reply with EXACTLY: SUFFICIENT: yes|no — <one-line reason>`
       ),
       new HumanMessage(
-        `Company: ${state.companyName}
-Iteration: ${state.iterationCount} of 3
-
-Research Notes Gathered:
-${notesSummary}
-
-News Findings:
-${newsSnippet}
-
-Financial Data Available: ${state.financialData ? "Yes" : "No"}
-
-Is there enough data to make a well-reasoned investment recommendation?`
+        `Iteration: ${state.iterationCount}/3\n\nNotes:\n${notesSummary}\n\nNews:\n${newsSnippet}\n\nFinancial data present: ${state.financialData ? "yes" : "no"}`
       ),
     ]);
 
     console.log(`[Sufficiency] LLM response: ${response.trim()}`);
-
-    if (response.toLowerCase().includes("sufficient: yes")) {
-      return "analyze";
-    }
-
-    return "research";
+    return response.toLowerCase().includes("sufficient: yes") ? "analyze" : "research";
   } catch (err) {
-    // If the LLM call fails, proceed to analysis with what we have
-    console.error(
-      "[Sufficiency] LLM call failed, proceeding with available data:",
-      err
-    );
+    // If the LLM call itself fails, don't waste another iteration — proceed.
+    console.error("[Sufficiency] LLM call failed — proceeding with available data:", err);
     return "analyze";
   }
 };

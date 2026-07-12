@@ -60,8 +60,13 @@ export async function withRetry<T>(
       const isRateLimit =
         lastError.message.includes("429") ||
         lastError.message.toLowerCase().includes("rate limit") ||
+        lastError.message.toLowerCase().includes("rate_limit") ||
         lastError.message.toLowerCase().includes("too many requests") ||
-        lastError.message.toLowerCase().includes("quota");
+        lastError.message.toLowerCase().includes("quota") ||
+        lastError.message.toLowerCase().includes("token") ||
+        lastError.message.toLowerCase().includes("capacity") ||
+        lastError.message.toLowerCase().includes("overloaded") ||
+        lastError.message.toLowerCase().includes("empty response");
 
       const isServerError =
         lastError.message.includes("500") ||

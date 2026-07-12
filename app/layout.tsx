@@ -9,14 +9,14 @@ const geistSans = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Investment Research Agent | AI-Powered Due Diligence",
+  title: "ResearchIQ — Institutional-Grade Company Research",
   description:
-    "AI-powered investment research agent. Get structured analysis, financial data, and risk assessment for any company — powered by LangGraph and Groq.",
-  keywords: ["investment research", "AI", "due diligence", "financial analysis", "LangGraph"],
-  authors: [{ name: "Investment Research Agent" }],
+    "Professional investment research platform. Get structured due diligence — business overview, financial data, risk signals, and an invest/pass verdict for any company.",
+  keywords: ["investment research", "due diligence", "financial analysis", "LangGraph", "company research"],
+  authors: [{ name: "ResearchIQ" }],
   openGraph: {
-    title: "Investment Research Agent",
-    description: "AI-powered due diligence for any company",
+    title: "ResearchIQ — Institutional-Grade Company Research",
+    description: "Professional due diligence for any company — powered by LangGraph and Groq.",
     type: "website",
   },
 };

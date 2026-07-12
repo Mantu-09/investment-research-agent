@@ -35,329 +35,250 @@ type AppState = "idle" | "loading" | "complete" | "error";
 
 // ── Step metadata ──────────────────────────────────────────────────────────
 
-const STEP_META: Record<string, { label: string; icon: string }> = {
-  start:    { label: "Initialising",          icon: "⚡" },
-  research: { label: "Researching Company",   icon: "🔍" },
-  analyze:  { label: "Synthesising Analysis", icon: "🧠" },
-  decide:   { label: "Forming Decision",      icon: "⚖️"  },
-  format:   { label: "Preparing Report",      icon: "📄" },
+const STEP_META: Record<string, { label: string }> = {
+  start:    { label: "Initialising" },
+  research: { label: "Data Collection" },
+  analyze:  { label: "Synthesis & Analysis" },
+  decide:   { label: "Investment Decision" },
+  format:   { label: "Report Generation" },
 };
 
+const STEP_ICONS: Record<string, React.ReactNode> = {
+  start: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <polygon points="5 3 19 12 5 21 5 3" />
+    </svg>
+  ),
+  research: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+    </svg>
+  ),
+  analyze: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M2 20h20M5 20V10l7-7 7 7v10" />
+    </svg>
+  ),
+  decide: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+    </svg>
+  ),
+  format: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" />
+    </svg>
+  ),
+};
+
+const CHECK_ICON = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function isValidUrl(str: string): boolean {
+  try { new URL(str); return true; } catch { return false; }
+}
+
+function formatDomain(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+function confidenceClass(v: number): string {
+  return v >= 70 ? "high" : v >= 45 ? "medium" : "low";
+}
+
+// ── Markdown parser ────────────────────────────────────────────────────────
 
 function parseAnalysisMarkdown(markdown: string): React.ReactNode {
   const lines = markdown.split("\n");
   const elements: React.ReactNode[] = [];
   let key = 0;
 
-  // Buffer for consecutive numbered-list items so they can be wrapped in <ol>
-  let olBuffer: string[] = [];
-
-  const flushOl = () => {
-    if (olBuffer.length === 0) return;
-    elements.push(
-      <ol key={key++} className="list-decimal list-inside space-y-1 text-slate-400 text-sm leading-relaxed mb-3 pl-1">
-        {olBuffer.map((item, i) => (
-          <li key={i} className="leading-relaxed">{item}</li>
-        ))}
-      </ol>
-    );
-    olBuffer = [];
-  };
-
   for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushOl(); // end any open numbered list on blank line
-      continue;
-    }
+    const t = line.trim();
+    if (!t) { elements.push(<div key={key++} style={{ height: 4 }} />); continue; }
 
-    if (trimmed.startsWith("# ")) {
-      flushOl();
+    if (t.startsWith("# ")) {
+      elements.push(<h1 key={key++} className="prose-h1">{t.slice(2)}</h1>);
+    } else if (t.startsWith("## ")) {
+      elements.push(<h2 key={key++} className="prose-h2">{t.slice(3)}</h2>);
+    } else if (t.startsWith("### ")) {
+      elements.push(<h3 key={key++} className="prose-h3">{t.slice(4)}</h3>);
+    } else if (t.startsWith("- ") || t.startsWith("* ")) {
       elements.push(
-        <h1 key={key++} className="text-xl font-bold text-white mb-4">
-          {trimmed.slice(2)}
-        </h1>
+        <div key={key++} className="prose-li">
+          <span className="prose-li-bullet">–</span>
+          <span>{renderInline(t.slice(2))}</span>
+        </div>
       );
-    } else if (trimmed.startsWith("## ")) {
-      flushOl();
-      elements.push(
-        <h2 key={key++} className="text-sm font-bold text-slate-100 mt-6 mb-2 pb-1.5 border-b border-slate-700/60 uppercase tracking-wider">
-          {trimmed.slice(3)}
-        </h2>
-      );
-    } else if (trimmed.startsWith("### ")) {
-      flushOl();
-      elements.push(
-        <h3 key={key++} className="text-sm font-semibold text-slate-200 mt-3 mb-1">
-          {trimmed.slice(4)}
-        </h3>
-      );
-    } else if (trimmed.startsWith("#### ")) {
-      flushOl();
-      elements.push(
-        <h4 key={key++} className="text-xs font-semibold text-slate-300 mt-2 mb-0.5 uppercase tracking-wide">
-          {trimmed.slice(5)}
-        </h4>
-      );
-    } else if (/^\d+\.\s/.test(trimmed)) {
-      // Numbered list item — buffer it; flush as <ol> when sequence ends
-      olBuffer.push(trimmed.replace(/^\d+\.\s/, ""));
-    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-      flushOl();
-      elements.push(
-        <li key={key++} className="flex gap-2 items-start text-slate-400 text-sm leading-relaxed mb-1">
-          <span className="text-slate-600 mt-0.5 shrink-0">–</span>
-          <span>{trimmed.slice(2)}</span>
-        </li>
-      );
-    } else if (trimmed.startsWith("*Research iterations")) {
-      flushOl();
-      elements.push(
-        <p key={key++} className="text-xs text-slate-500 italic mb-3">{trimmed.replace(/\*/g, "")}</p>
-      );
-    } else if (trimmed.startsWith("---")) {
-      flushOl();
-      elements.push(<hr key={key++} className="border-slate-700/50 my-4" />);
-    } else if (trimmed.startsWith("**Verdict:")) {
-      flushOl();
-      // Skip — verdict is shown in the decision card
+    } else if (t.startsWith("---")) {
+      elements.push(<hr key={key++} className="prose-hr" />);
+    } else if (t.startsWith("*Research iterations") || t.startsWith("*research iterations")) {
+      elements.push(<p key={key++} className="prose-meta">{t.replace(/\*/g, "")}</p>);
+    } else if (t.startsWith("**Verdict:")) {
+      // Skip — shown in decision card
     } else {
-      flushOl();
-      // Parse inline **bold** markers into <strong> elements
-      const parts = trimmed.split(/\*\*(.*?)\*\*/g);
-      const inlineElements: React.ReactNode[] = parts.map((part, i) =>
-        // Odd-indexed parts were inside ** ** markers — render bold
-        i % 2 === 1 ? <strong key={i} className="text-slate-200 font-semibold">{part}</strong> : part
-      );
-      elements.push(
-        <p key={key++} className="text-slate-400 text-sm leading-relaxed mb-2">
-          {inlineElements}
-        </p>
-      );
+      elements.push(<p key={key++} className="prose-p">{renderInline(t)}</p>);
     }
   }
-
-  // Flush any trailing numbered list
-  flushOl();
-
   return <>{elements}</>;
 }
 
-function isValidUrl(str: string): boolean {
-  try {
-    new URL(str);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function formatDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
+function renderInline(text: string): React.ReactNode {
+  const parts = text.split(/\*\*(.*?)\*\*/g);
+  return parts.map((p, i) =>
+    i % 2 === 1 ? <strong key={i} className="prose-bold">{p}</strong> : p
+  );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-function ConfidenceBar({ value }: { value: number }) {
-  const color =
-    value >= 70 ? "bg-emerald-500" :
-    value >= 45 ? "bg-amber-400"  :
-                  "bg-rose-500";
-
+function NavBar() {
   return (
-    <div
-      className="mt-2"
-      role="meter"
-      aria-valuenow={value}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-label={`Confidence score: ${value}%`}
-    >
-      <div className="flex justify-between items-center mb-1">
-        <span className="text-xs text-slate-500 font-medium uppercase tracking-wide">Confidence</span>
-        <span className="text-sm font-bold text-slate-200" aria-hidden="true">{value}%</span>
+    <nav className="nav">
+      <a className="nav-logo" href="/">
+        <div className="nav-logo-icon">📊</div>
+        <span className="nav-logo-text">Research<span>IQ</span></span>
+      </a>
+      <div className="nav-divider" />
+      <div className="nav-links">
+        <span className="nav-link active">Research</span>
+        <span className="nav-link">Markets</span>
+        <span className="nav-link">Portfolio</span>
+        <span className="nav-link">Reports</span>
       </div>
-      <div className="h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-1000 ${color}`}
-          style={{ width: `${value}%` }}
-          aria-hidden="true"
-        />
+      <div className="nav-right">
+        <div className="nav-status">
+          <span className="status-dot" />
+          All systems operational
+        </div>
       </div>
-    </div>
+    </nav>
   );
 }
 
-function StepItem({ step, index }: { step: ProgressStep; index: number }) {
-  const meta = STEP_META[step.step] || { label: step.step, icon: "●" };
+function StepRow({ step, isLast }: { step: ProgressStep; isLast: boolean }) {
+  const meta = STEP_META[step.step] || { label: step.step };
+  const icon = STEP_ICONS[step.step];
   const isActive = !step.done;
+  const delay = `${Object.keys(STEP_META).indexOf(step.step) * 60}ms`;
 
   return (
-    <div
-      role="listitem"
-      aria-label={`${meta.label}: ${step.message}`}
-      aria-live={isActive ? "polite" : undefined}
-      aria-atomic={isActive ? "true" : undefined}
-      className="flex items-start gap-3 animate-slide-in"
-      style={{ animationDelay: `${index * 60}ms` }}
-    >
-      {/* Icon / spinner */}
-      <div className="mt-0.5 shrink-0" aria-hidden="true">
-        {isActive ? (
-          <div className="w-5 h-5 rounded-full border-2 border-emerald-500/40 border-t-emerald-400 animate-spin-slow" />
-        ) : (
-          <div className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
-            <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
+    <div className="step-row" style={{ animationDelay: delay }}>
+      <div className="step-line">
+        <div className={`step-dot ${step.done ? "done" : "active"}`} style={{ color: step.done ? "#34d399" : "#60a5fa" }}>
+          {step.done ? CHECK_ICON : (isActive ? <div className="spinner" /> : icon)}
+        </div>
+        {!isLast && (
+          <div style={{
+            position: "absolute", left: "50%", top: 28, bottom: -20,
+            transform: "translateX(-50%)", width: 1,
+            background: "var(--border-subtle)"
+          }} />
         )}
       </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            {meta.icon} {meta.label}
-          </span>
-          {isActive && (
-            <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-medium" aria-label="Step in progress">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" aria-hidden="true" />
-              Live
-            </span>
-          )}
-        </div>
-        <p className="text-sm text-slate-300 leading-snug">{step.message}</p>
-
-        {/* Extra data badges */}
+      <div className="step-content">
+        <div className="step-label">{meta.label}</div>
+        <div className="step-message">{step.message}</div>
         {step.data && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5" aria-label="Step details">
+          <div className="step-badges">
             {step.data.iterationCount !== undefined && (
-              <span className="px-2 py-0.5 rounded-full text-xs bg-slate-700/50 text-slate-400 border border-slate-600/40">
-                Iteration {String(step.data.iterationCount)}
-              </span>
+              <span className="badge badge-slate">Iteration {String(step.data.iterationCount)}</span>
             )}
             {step.data.notesGathered !== undefined && (
-              <span className="px-2 py-0.5 rounded-full text-xs bg-blue-900/30 text-blue-400 border border-blue-800/30">
-                {String(step.data.notesGathered)} data points
+              <span className="badge badge-blue">{String(step.data.notesGathered)} data points</span>
+            )}
+            {step.data.hasFinancialData !== undefined && (
+              <span className={`badge ${step.data.hasFinancialData ? "badge-green" : "badge-slate"}`}>
+                {step.data.hasFinancialData ? "Financial data ✓" : "No financial data"}
               </span>
             )}
             {step.data.verdict !== undefined && (
-              <span className={`px-2 py-0.5 rounded-full text-xs border font-semibold ${
-                step.data.verdict === "invest"
-                  ? "bg-emerald-900/30 text-emerald-400 border-emerald-700/30"
-                  : "bg-rose-900/30 text-rose-400 border-rose-700/30"
-              }`}>
-                {String(step.data.verdict).toUpperCase()} · {String(step.data.confidence)}%
+              <span className={`badge ${step.data.verdict === "invest" ? "badge-green" : "badge-red"}`}>
+                {String(step.data.verdict).toUpperCase()} · {String(step.data.confidence)}% confidence
               </span>
             )}
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function VerdictBadge({ verdict }: { verdict: "invest" | "pass" }) {
-  const isInvest = verdict === "invest";
-  return (
-    <div
-      role="status"
-      aria-label={`Investment verdict: ${isInvest ? "Invest" : "Pass"}`}
-      className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold uppercase tracking-widest border ${
-        isInvest
-          ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 glow-emerald"
-          : "bg-rose-500/15 text-rose-300 border-rose-500/30 glow-rose"
-      }`}
-    >
-      <span className={`w-2 h-2 rounded-full ${isInvest ? "bg-emerald-400" : "bg-rose-400"} animate-pulse-dot`} aria-hidden="true" />
-      {isInvest ? "✓ Invest" : "✕ Pass"}
     </div>
   );
 }
 
 function DecisionCard({ decision, companyName }: { decision: InvestmentDecision; companyName: string }) {
   const isInvest = decision.verdict === "invest";
+  const cls = isInvest ? "invest" : "pass";
+  const confClass = confidenceClass(decision.confidence);
 
   return (
-    <div className="animate-fade-up rounded-2xl border bg-slate-800/40 backdrop-blur-sm overflow-hidden"
-      style={{
-        borderColor: isInvest ? "rgba(16,185,129,0.25)" : "rgba(244,63,94,0.25)",
-        boxShadow: isInvest
-          ? "0 0 40px rgba(16,185,129,0.08), inset 0 1px 0 rgba(255,255,255,0.05)"
-          : "0 0 40px rgba(244,63,94,0.08), inset 0 1px 0 rgba(255,255,255,0.05)",
-      }}
-    >
-      {/* Card header */}
-      <div className={`px-6 py-5 border-b ${isInvest ? "border-emerald-800/30" : "border-rose-800/30"}`}
-        style={{
-          background: isInvest
-            ? "linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(17,24,39,0) 60%)"
-            : "linear-gradient(135deg, rgba(244,63,94,0.08) 0%, rgba(17,24,39,0) 60%)",
-        }}
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-          <div>
-            <p className="text-xs text-slate-500 font-medium uppercase tracking-widest mb-1">Investment Decision</p>
-            <h2 className="text-xl font-bold text-white truncate max-w-[420px]" title={companyName}>{companyName}</h2>
-          </div>
-          <VerdictBadge verdict={decision.verdict} />
+    <div className={`decision-card ${cls}`}>
+      {/* Header */}
+      <div className={`decision-header ${cls}`}>
+        <div>
+          <div className="decision-company-label">Investment Decision</div>
+          <div className="decision-company-name">{companyName}</div>
         </div>
-        <ConfidenceBar value={decision.confidence} />
+        <div className={`verdict-badge ${cls}`}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            {isInvest
+              ? <polyline points="20 6 9 17 4 12" />
+              : <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>
+            }
+          </svg>
+          {isInvest ? "BUY" : "PASS"}
+        </div>
+      </div>
+
+      {/* Confidence */}
+      <div className="confidence-wrap">
+        <span className="confidence-label">Confidence</span>
+        <div className="confidence-track">
+          <div className={`confidence-fill ${confClass}`} style={{ width: `${decision.confidence}%` }} />
+        </div>
+        <span className="confidence-value">{decision.confidence}%</span>
       </div>
 
       {/* Reasoning */}
-      <div className="px-6 py-5 border-b border-slate-700/40">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Reasoning</p>
-        <p className="text-sm text-slate-300 leading-relaxed">{decision.reasoning}</p>
+      <div className="card-section">
+        <div className="card-section-label">Analyst Reasoning</div>
+        <p className="reasoning-text">{decision.reasoning}</p>
       </div>
 
-      {/* Key risks */}
+      {/* Key Risks */}
       {decision.keyRisks.length > 0 && (
-        <div className="px-6 py-5 border-b border-slate-700/40">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Key Risks</p>
-          <ul className="space-y-2">
-            {decision.keyRisks.map((risk, i) => (
-              <li key={i} className="flex items-start gap-2.5">
-                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                <span className="text-sm text-slate-400 leading-relaxed">{risk}</span>
-              </li>
+        <div className="card-section">
+          <div className="card-section-label">Key Risk Factors</div>
+          <div className="risk-list">
+            {decision.keyRisks.map((r, i) => (
+              <div key={i} className="risk-item">
+                <span className="risk-bullet" />
+                <span>{r}</span>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
 
       {/* Sources */}
       {decision.sources.length > 0 && (
-        <div className="px-6 py-5">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Sources</p>
-          <div className="flex flex-wrap gap-2">
+        <div className="card-section">
+          <div className="card-section-label">Data Sources</div>
+          <div className="source-chips">
             {decision.sources.map((src, i) =>
               isValidUrl(src) ? (
-                <a
-                  key={i}
-                  href={src}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-slate-700/40 text-blue-400 border border-slate-600/30 hover:bg-slate-700/70 hover:text-blue-300 transition-colors"
-                >
-                  <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                <a key={i} href={src} target="_blank" rel="noopener noreferrer" className="source-chip">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
                   </svg>
                   {formatDomain(src)}
                 </a>
               ) : (
-                <span
-                  key={i}
-                  className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs bg-slate-700/30 text-slate-400 border border-slate-600/20"
-                >
-                  {src}
-                </span>
+                <span key={i} className="source-chip-plain">{src}</span>
               )
             )}
           </div>
@@ -370,54 +291,37 @@ function DecisionCard({ decision, companyName }: { decision: InvestmentDecision;
 function AnalysisCard({ analysis }: { analysis: string }) {
   const [expanded, setExpanded] = useState(false);
 
-  // Strip the report header lines (already shown in the card header) and decision section (shown separately)
-  const cleanedAnalysis = analysis
+  const cleaned = analysis
     .replace(/^# Investment Research Report:.*\n?/m, "")
     .replace(/\*Research iterations:.*\n?/g, "")
     .replace(/---\n?## Investment Decision[\s\S]*/m, "")
     .trim();
 
-  const PREVIEW_LIMIT = 1200;
-  const isLong = cleanedAnalysis.length > PREVIEW_LIMIT;
-
-  // Find the nearest sentence boundary at or before the limit so we never
-  // clip mid-sentence. Search backwards from the limit for . ! or ?
-  let previewText = cleanedAnalysis;
+  const LIMIT = 1400;
+  const isLong = cleaned.length > LIMIT;
+  let preview = cleaned;
   if (isLong && !expanded) {
-    const candidate = cleanedAnalysis.slice(0, PREVIEW_LIMIT);
-    // Find the last sentence-ending punctuation at or before the limit
-    const boundaryIdx = Math.max(
-      candidate.lastIndexOf("."),
-      candidate.lastIndexOf("!"),
-      candidate.lastIndexOf("?")
-    );
-    if (boundaryIdx > PREVIEW_LIMIT * 0.5) {
-      // Good boundary found — cut right after the punctuation mark
-      previewText = cleanedAnalysis.slice(0, boundaryIdx + 1) + "\u2026";
-    } else {
-      // No sentence boundary in the first half — fall back to hard cut
-      previewText = candidate + "\u2026";
-    }
+    const candidate = cleaned.slice(0, LIMIT);
+    const idx = Math.max(candidate.lastIndexOf("."), candidate.lastIndexOf("!"), candidate.lastIndexOf("?"));
+    preview = idx > LIMIT * 0.5 ? cleaned.slice(0, idx + 1) + "…" : candidate + "…";
   }
 
   return (
-    <div className="animate-fade-up rounded-2xl border border-slate-700/40 bg-slate-800/30 backdrop-blur-sm overflow-hidden"
-      style={{ animationDelay: "120ms" }}
-    >
-      <div className="px-6 py-4 border-b border-slate-700/40 flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-blue-400" />
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest">Research Analysis</p>
-      </div>
-      <div className="px-6 py-5">
-        <div className="prose-analysis">
-          {parseAnalysisMarkdown(previewText)}
+    <div className="analysis-card">
+      <div className="analysis-header">
+        <div className="analysis-header-left">
+          <div className="analysis-dot" />
+          <span className="analysis-title">Research Analysis</span>
         </div>
+        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          {Math.ceil(cleaned.length / 5)} words
+        </span>
+      </div>
+      <div className="analysis-body">
+        {parseAnalysisMarkdown(expanded ? cleaned : preview)}
         {isLong && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="mt-3 text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors flex items-center gap-1"
-          >
-            {expanded ? "Show less ↑" : "Show full analysis ↓"}
+          <button className="read-more-btn" onClick={() => setExpanded(!expanded)}>
+            {expanded ? "Show less ↑" : "Read full analysis ↓"}
           </button>
         )}
       </div>
@@ -425,7 +329,36 @@ function AnalysisCard({ analysis }: { analysis: string }) {
   );
 }
 
+function SkeletonCard() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-base)", borderRadius: 12, padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20 }}>
+          <div>
+            <div className="skeleton" style={{ height: 10, width: 120, marginBottom: 8 }} />
+            <div className="skeleton" style={{ height: 22, width: 200 }} />
+          </div>
+          <div className="skeleton" style={{ height: 34, width: 90, borderRadius: 8 }} />
+        </div>
+        <div className="skeleton" style={{ height: 4, width: "100%", marginBottom: 20 }} />
+        <div className="skeleton" style={{ height: 10, width: 80, marginBottom: 10 }} />
+        <div className="skeleton" style={{ height: 14, width: "100%", marginBottom: 6 }} />
+        <div className="skeleton" style={{ height: 14, width: "85%", marginBottom: 6 }} />
+        <div className="skeleton" style={{ height: 14, width: "70%" }} />
+      </div>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-base)", borderRadius: 12, padding: 24 }}>
+        <div className="skeleton" style={{ height: 10, width: 140, marginBottom: 16 }} />
+        {[100, 92, 78, 88, 65].map((w, i) => (
+          <div key={i} className="skeleton" style={{ height: 13, width: `${w}%`, marginBottom: 8 }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
+
+const EXAMPLE_COMPANIES = ["Apple", "Stripe", "Nvidia", "Tesla", "OpenAI"];
 
 export default function Home() {
   const [companyName, setCompanyName] = useState("");
@@ -436,113 +369,76 @@ export default function Home() {
   const abortRef = useRef<AbortController | null>(null);
   const stepCounterRef = useRef(0);
 
-  // Abort any in-flight SSE stream when the component unmounts
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
+  useEffect(() => { return () => { abortRef.current?.abort(); }; }, []);
 
   const addStep = useCallback((step: string, message: string, data?: Record<string, unknown>) => {
     const id = `step-${stepCounterRef.current++}-${step}`;
-    setSteps((prev) => {
-      // Mark all previous active steps as done
-      const updated = prev.map((s) => (!s.done ? { ...s, done: true } : s));
-      return [
-        ...updated,
-        { id, step, message, data, timestamp: Date.now(), done: false },
-      ];
+    setSteps(prev => {
+      const updated = prev.map(s => (!s.done ? { ...s, done: true } : s));
+      return [...updated, { id, step, message, data, timestamp: Date.now(), done: false }];
     });
   }, []);
 
   const markLastDone = useCallback(() => {
-    setSteps((prev) => prev.map((s, i) => i === prev.length - 1 ? { ...s, done: true } : s));
+    setSteps(prev => prev.map((s, i) => i === prev.length - 1 ? { ...s, done: true } : s));
   }, []);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const name = companyName.trim();
-      if (!name || appState === "loading") return;
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = companyName.trim();
+    if (!name || appState === "loading") return;
 
-      // Reset state
-      setAppState("loading");
-      setSteps([]);
-      setResult(null);
-      setErrorMsg("");
-      stepCounterRef.current = 0;
+    setAppState("loading");
+    setSteps([]);
+    setResult(null);
+    setErrorMsg("");
+    stepCounterRef.current = 0;
 
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
 
-      try {
-        const response = await fetch("/api/research", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ companyName: name }),
-          signal: abortRef.current.signal,
-        });
+    try {
+      const response = await fetch("/api/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyName: name }),
+        signal: abortRef.current.signal,
+      });
 
-        if (!response.ok || !response.body) {
-          throw new Error(`Server error: ${response.status}`);
+      if (!response.ok || !response.body) throw new Error(`Server error: ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const json = JSON.parse(line.slice(6));
+            if (json.type === "progress") addStep(json.step, json.message, json.data);
+            else if (json.type === "complete") { markLastDone(); setResult(json.result); setAppState("complete"); }
+            else if (json.type === "error") { setErrorMsg(json.message); setAppState("error"); }
+          } catch { /* skip malformed */ }
         }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop() ?? "";
-
-          for (const part of parts) {
-            const dataLine = part.trim();
-            if (!dataLine.startsWith("data: ")) continue;
-
-            try {
-              const json = JSON.parse(dataLine.slice(6));
-
-              if (json.type === "progress") {
-                addStep(json.step, json.message, json.data);
-              } else if (json.type === "complete") {
-                markLastDone();
-                setResult(json.result);
-                setAppState("complete");
-              } else if (json.type === "error") {
-                setErrorMsg(json.message);
-                setAppState("error");
-              }
-            } catch {
-              // Skip malformed SSE lines
-            }
-          }
-        }
-
-        // Fallback: if the stream ended without a "complete" or "error" event,
-        // transition to an error state so the user isn't stuck in loading.
-        setAppState((prev) => {
-          if (prev === "loading") {
-            markLastDone();
-            setErrorMsg("The research stream ended unexpectedly. Please try again.");
-            return "error";
-          }
-          return prev;
-        });
-
-      } catch (err) {
-        if ((err as Error).name === "AbortError") return;
-        setErrorMsg(
-          err instanceof Error ? err.message : "An unexpected error occurred."
-        );
-        setAppState("error");
       }
-    },
-    [companyName, appState, addStep, markLastDone]
-  );
+
+      setAppState(prev => {
+        if (prev === "loading") { markLastDone(); setErrorMsg("Research stream ended unexpectedly. Please try again."); return "error"; }
+        return prev;
+      });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setErrorMsg(err instanceof Error ? err.message : "An unexpected error occurred.");
+      setAppState("error");
+    }
+  }, [companyName, appState, addStep, markLastDone]);
 
   const handleReset = () => {
     abortRef.current?.abort();
@@ -553,318 +449,240 @@ export default function Home() {
     setCompanyName("");
   };
 
-  const isLoading = appState === "loading";
+  const isLoading  = appState === "loading";
   const isComplete = appState === "complete";
-  const isError = appState === "error";
+  const isError    = appState === "error";
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
-      {/* ── Background gradient blobs ── */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none" aria-hidden>
-        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full opacity-5"
-          style={{ background: "radial-gradient(circle, #10b981, transparent 70%)" }} />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full opacity-5"
-          style={{ background: "radial-gradient(circle, #3b82f6, transparent 70%)" }} />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full opacity-[0.03]"
-          style={{ background: "radial-gradient(circle, #8b5cf6, transparent 70%)" }} />
-      </div>
+    <>
+      {/* Background grid */}
+      <div className="grid-bg" />
 
-      {/* ── Header ── */}
-      <header className="relative z-10 px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between border-b border-slate-800/60">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg"
-            style={{ background: "linear-gradient(135deg, #10b981, #3b82f6)" }}>
-            📈
+      {/* Navigation */}
+      <NavBar />
+
+      {/* Main layout */}
+      <div style={{ position: "relative", zIndex: 1 }}>
+
+        {/* ── Hero ── */}
+        <div className="hero">
+          <div className="hero-eyebrow">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+            Institutional-Grade Research
           </div>
-          <div>
-            <span className="text-base font-bold text-white tracking-tight">ResearchAgent</span>
-            <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-400 border border-emerald-800/40 font-medium">AI</span>
-          </div>
-        </div>
-        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
-          Powered by LangGraph + Groq
-        </div>
-      </header>
 
-      {/* ── Main content ── */}
-      <main className="relative z-10 flex-1 w-full max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
-
-        {/* Hero */}
-        <div className="text-center mb-10">
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight mb-4 text-balance">
-            <span className="text-white">AI-Powered </span>
-            <span className="gradient-text">Investment Research</span>
+          <h1 className="hero-title">
+            Company Due Diligence,<br />
+            <span className="hero-title-accent">Powered by AI</span>
           </h1>
-          <p className="text-slate-400 text-sm sm:text-base max-w-xl mx-auto leading-relaxed">
-            Enter any company name and get a structured due-diligence report —
-            business overview, financial health, competitive position, risk factors, and a final verdict.
+
+          <p className="hero-sub">
+            Enter any company name to receive a structured investment analysis —
+            business overview, financial metrics, competitive positioning, risk signals, and a final verdict.
           </p>
-        </div>
 
-        {/* ── Search form ── */}
-        <form onSubmit={handleSubmit} className="mb-8">
-          <div className="relative group">
-            {/* Glow ring on focus */}
-            <div className="absolute -inset-0.5 rounded-2xl opacity-0 group-focus-within:opacity-100 transition-opacity duration-300"
-              style={{ background: "linear-gradient(135deg, #10b981, #3b82f6)", filter: "blur(6px)" }} />
-
-            <div className="relative flex flex-col sm:flex-row gap-3 bg-slate-800/70 backdrop-blur-sm border border-slate-700/60 rounded-2xl p-3">
-              {/* Search icon */}
-              <div className="hidden sm:flex items-center pl-2 text-slate-500">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </div>
-
+          {/* Search */}
+          <form onSubmit={handleSubmit} style={{ width: "100%" }}>
+            <div className="search-box">
+              <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+              </svg>
               <input
                 id="company-name-input"
+                className="search-input"
                 type="text"
                 value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
+                onChange={e => setCompanyName(e.target.value)}
                 placeholder="e.g. Apple, Stripe, SpaceX, Nvidia…"
                 disabled={isLoading}
                 autoFocus
                 maxLength={200}
-                className="flex-1 bg-transparent text-white placeholder-slate-500 text-base font-medium outline-none px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label="Company name"
               />
-
               <button
                 type="submit"
                 id="research-submit-btn"
+                className="search-btn"
                 disabled={isLoading || !companyName.trim()}
-                className="relative flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed overflow-hidden"
-                style={{
-                  background: "linear-gradient(135deg, #059669, #2563eb)",
-                }}
               >
                 {isLoading ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin-slow" />
-                    Researching…
+                    <div className="spinner" style={{ borderColor: "rgba(255,255,255,0.2)", borderTopColor: "#fff" }} />
+                    Analysing…
                   </>
                 ) : (
                   <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
                     </svg>
-                    Analyse
+                    Run Analysis
                   </>
                 )}
               </button>
             </div>
-          </div>
 
-          {/* Example chips */}
+            {/* Quick-pick chips */}
+            {appState === "idle" && (
+              <div className="chips">
+                <span className="chip-label">Try:</span>
+                {EXAMPLE_COMPANIES.map(co => (
+                  <button key={co} type="button" className="chip" onClick={() => setCompanyName(co)}>
+                    {co}
+                  </button>
+                ))}
+              </div>
+            )}
+          </form>
+
+          {/* Trust bar */}
           {appState === "idle" && (
-            <div className="flex flex-wrap gap-2 mt-3 justify-center">
-              {["Apple", "Stripe", "Nvidia", "OpenAI", "Tesla"].map((co) => (
-                <button
-                  key={co}
-                  type="button"
-                  onClick={() => setCompanyName(co)}
-                  className="px-3 py-1 rounded-full text-xs text-slate-400 border border-slate-700/60 hover:border-slate-500 hover:text-slate-200 transition-colors bg-slate-800/30"
-                >
-                  {co}
-                </button>
+            <div className="trust-bar">
+              {[
+                { icon: "🔗", label: "7 Data Sources" },
+                { icon: "⚡", label: "Real-time Analysis" },
+                { icon: "🛡", label: "LangGraph Verified" },
+                { icon: "📊", label: "Alpha Vantage + Tavily" },
+              ].map((item, i, arr) => (
+                <span key={i} style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                  <span className="trust-item">
+                    <span>{item.icon}</span>
+                    {item.label}
+                  </span>
+                  {i < arr.length - 1 && <span className="trust-sep" />}
+                </span>
               ))}
             </div>
           )}
-        </form>
+        </div>
 
-        {/* ── Progress steps ── */}
-        {(isLoading || isComplete || isError) && steps.length > 0 && (
-          <div className="mb-8 rounded-2xl border border-slate-700/40 bg-slate-800/30 backdrop-blur-sm overflow-hidden">
-            {/* Header */}
-            <div className="px-5 py-3.5 border-b border-slate-700/40 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {isLoading && (
-                  <div className="w-4 h-4 border-2 border-emerald-500/40 border-t-emerald-400 rounded-full animate-spin-slow" />
-                )}
-                {isComplete && (
-                  <div className="w-4 h-4 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                    <svg className="w-2.5 h-2.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                )}
-                {isError && <span className="text-rose-400 text-xs">⚠</span>}
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
-                  {isLoading ? "Research in progress" : isComplete ? "Research complete" : "Error"}
-                </span>
-              </div>
-              {(isComplete || isError) && (
-                <button
-                  onClick={handleReset}
-                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
-                >
-                  ↺ New search
-                </button>
-              )}
-            </div>
+        {/* ── Content area ── */}
+        <div style={{ maxWidth: 760, margin: "0 auto", padding: "0 24px 80px" }}>
 
-            {/* Steps list */}
-            <div
-              className="p-5 space-y-4"
-              role="list"
-              aria-label="Research progress steps"
-            >
-              {steps.map((step, i) => (
-                <StepItem key={step.id} step={step} index={i} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Error state ── */}
-        {isError && (
-          <div className="animate-fade-up rounded-2xl border border-rose-800/40 bg-rose-900/10 px-6 py-5 mb-8">
-            <div className="flex items-start gap-3">
-              <span className="text-rose-400 text-lg mt-0.5">⚠</span>
-              <div>
-                <p className="text-sm font-semibold text-rose-300 mb-1">Research failed</p>
-                <p className="text-sm text-rose-400/80 leading-relaxed">{errorMsg}</p>
-                <button
-                  onClick={handleReset}
-                  className="mt-3 text-xs text-rose-400 hover:text-rose-300 font-medium border border-rose-800/40 hover:border-rose-700/40 px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  Try again
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-        {/* ── Loading skeleton — shows card-shaped preview while waiting ── */}
-        {isLoading && (
-          <div className="space-y-4 mb-8 animate-fade-up">
-            {/* Decision skeleton */}
-            <div className="rounded-2xl border border-slate-700/30 bg-slate-800/30 p-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-                <div>
-                  <div className="h-3 w-24 rounded shimmer mb-2" />
-                  <div className="h-6 w-48 rounded shimmer" />
-                </div>
-                <div className="h-8 w-28 rounded-full shimmer" />
-              </div>
-              <div className="h-1.5 rounded-full shimmer mb-6 w-full" />
-              <div className="space-y-2">
-                <div className="h-3 w-20 rounded shimmer mb-1" />
-                <div className="h-4 w-full rounded shimmer" />
-                <div className="h-4 w-5/6 rounded shimmer" />
-                <div className="h-4 w-3/4 rounded shimmer" />
-              </div>
-            </div>
-            {/* Analysis skeleton */}
-            <div className="rounded-2xl border border-slate-700/30 bg-slate-800/30 p-6">
-              <div className="h-3 w-32 rounded shimmer mb-4" />
-              <div className="space-y-2">
-                <div className="h-4 w-full rounded shimmer" />
-                <div className="h-4 w-11/12 rounded shimmer" />
-                <div className="h-4 w-5/6 rounded shimmer" />
-                <div className="h-4 w-full rounded shimmer" />
-                <div className="h-4 w-3/4 rounded shimmer" />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Results ── */}
-        {isComplete && result && (
-          <div className="space-y-6">
-            {/* Decision card — or fallback if no decision was generated */}
-            {result.decision ? (
-              <DecisionCard
-                decision={result.decision}
-                companyName={result.companyName}
-              />
-            ) : (
-              <div className="animate-fade-up rounded-2xl border border-amber-800/30 bg-amber-900/10 px-6 py-5">
-                <div className="flex items-start gap-3">
-                  <span className="text-amber-400 text-lg mt-0.5">⚠</span>
-                  <div>
-                    <p className="text-sm font-semibold text-amber-300 mb-1">No decision generated</p>
-                    <p className="text-sm text-amber-400/80 leading-relaxed">
-                      The research agent was unable to produce a structured investment decision for <strong className="text-amber-300">{result.companyName}</strong>.
-                      This can happen when insufficient data is available or API limits are hit.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Analysis card */}
-            {result.analysis && (
-              <AnalysisCard analysis={result.analysis} />
-            )}
-
-            {/* Stats row */}
-            <div className="animate-fade-up grid grid-cols-3 gap-3" style={{ animationDelay: "240ms" }}>
+          {/* Feature cards (idle only) */}
+          {appState === "idle" && (
+            <div className="features">
               {[
-                { label: "Research Iterations", value: String(result.iterationCount), icon: "🔄" },
-                { label: "Data Points", value: String(result.researchNotes.length), icon: "📊" },
-                { label: "News Signals", value: String(result.newsFindings.length), icon: "📰" },
-              ].map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-xl border border-slate-700/40 bg-slate-800/30 px-4 py-4 text-center"
-                >
-                  <div className="text-xl mb-1">{stat.icon}</div>
-                  <div className="text-lg font-bold text-white">{stat.value}</div>
-                  <div className="text-xs text-slate-500 mt-0.5 leading-tight">{stat.label}</div>
+                {
+                  cls: "blue", emoji: "🔍",
+                  title: "Web Intelligence",
+                  desc: "Business model, recent news, and competitive landscape via real-time web search.",
+                },
+                {
+                  cls: "gold", emoji: "📈",
+                  title: "Financial Metrics",
+                  desc: "P/E ratio, market cap, revenue, profit margins, and live stock quotes.",
+                },
+                {
+                  cls: "red", emoji: "⚠️",
+                  title: "Risk Signals",
+                  desc: "Lawsuits, layoffs, regulatory actions, and executive leadership changes.",
+                },
+              ].map((f, i) => (
+                <div key={i} className="feature-card">
+                  <div className={`feature-icon ${f.cls}`}>{f.emoji}</div>
+                  <div className="feature-title">{f.title}</div>
+                  <div className="feature-desc">{f.desc}</div>
                 </div>
               ))}
             </div>
+          )}
 
-            {/* New search CTA */}
-            <div className="animate-fade-up text-center pt-2" style={{ animationDelay: "300ms" }}>
-              <button
-                onClick={handleReset}
-                id="new-search-btn"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold border border-slate-600/40 text-slate-300 hover:border-slate-500 hover:text-white hover:bg-slate-700/30 transition-all"
-              >
+          {/* Progress panel */}
+          {(isLoading || isComplete || isError) && steps.length > 0 && (
+            <div className="progress-panel" style={{ marginBottom: 20 }}>
+              <div className="progress-header">
+                <div className="progress-header-left">
+                  {isLoading && <div className="spinner" />}
+                  {isComplete && (
+                    <div style={{ width: 16, height: 16, borderRadius: "50%", background: "rgba(16,185,129,0.12)", border: "1.5px solid rgba(16,185,129,0.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "#34d399" }}>
+                      {CHECK_ICON}
+                    </div>
+                  )}
+                  {isError && <span style={{ color: "#f87171", fontSize: 14 }}>⚠</span>}
+                  <span className="progress-title">
+                    {isLoading ? "Research in progress" : isComplete ? "Research complete" : "Research failed"}
+                  </span>
+                </div>
+                {(isComplete || isError) && (
+                  <button className="reset-btn" onClick={handleReset}>
+                    ↺ New research
+                  </button>
+                )}
+              </div>
+              <div className="progress-body">
+                {steps.map((step, i) => (
+                  <StepRow key={step.id} step={step} isLast={i === steps.length - 1} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Loading skeleton */}
+          {isLoading && <SkeletonCard />}
+
+          {/* Error */}
+          {isError && (
+            <div className="alert alert-error" style={{ marginBottom: 20 }}>
+              <span className="alert-icon">⚠️</span>
+              <div>
+                <div className="alert-title">Analysis failed</div>
+                <div className="alert-body">{errorMsg}</div>
+                <button className="alert-btn" onClick={handleReset}>Try again</button>
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
+          {isComplete && result && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {result.decision ? (
+                <DecisionCard decision={result.decision} companyName={result.companyName} />
+              ) : (
+                <div className="alert alert-warning">
+                  <span className="alert-icon">⚠️</span>
+                  <div>
+                    <div className="alert-title">No decision generated</div>
+                    <div className="alert-body">
+                      The agent was unable to produce a structured decision for <strong>{result.companyName}</strong>.
+                      This typically happens when API rate limits are hit or insufficient data was gathered.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {result.analysis && <AnalysisCard analysis={result.analysis} />}
+
+              {/* Metadata row */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 4 }}>
+                {[
+                  `${result.iterationCount} research iteration${result.iterationCount !== 1 ? "s" : ""}`,
+                  `${result.researchNotes.length} data points collected`,
+                  `${result.newsFindings.length} news signals`,
+                  result.financialData?.isPubliclyTraded ? "Publicly traded ✓" : "Private company",
+                ].map((item, i) => (
+                  <span key={i} className="badge badge-slate">{item}</span>
+                ))}
+              </div>
+
+              <button className="reset-btn" onClick={handleReset} style={{ alignSelf: "flex-start" }}>
                 ↺ Research another company
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* ── Idle empty state ── */}
-        {appState === "idle" && (
-          <div className="mt-4 text-center">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
-              {[
-                { icon: "🔍", title: "Web Research", desc: "Company overview, news, and competitive landscape" },
-                { icon: "📈", title: "Financial Data", desc: "P/E ratio, market cap, revenue and profit margins" },
-                { icon: "⚠️", title: "Risk Analysis", desc: "Lawsuits, layoffs, regulatory and leadership signals" },
-              ].map((f) => (
-                <div
-                  key={f.title}
-                  className="rounded-xl border border-slate-800/60 bg-slate-800/20 px-4 py-5 text-left hover:border-slate-700/60 hover:bg-slate-800/40 transition-all duration-200"
-                >
-                  <div className="text-2xl mb-3">{f.icon}</div>
-                  <p className="text-sm font-semibold text-slate-200 mb-1">{f.title}</p>
-                  <p className="text-xs text-slate-500 leading-relaxed">{f.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* ── Footer ── */}
-      <footer className="relative z-10 border-t border-slate-800/60 py-6 px-4 sm:px-6 text-center">
-        <p className="text-xs text-slate-600">
-          Investment Research Agent · Built with{" "}
-          <span className="text-slate-500">LangGraph</span>,{" "}
-          <span className="text-slate-500">Groq</span>,{" "}
-          <span className="text-slate-500">Next.js 14</span>
-        </p>
-        <p className="text-xs text-slate-700 mt-1">
-          For informational purposes only — not financial advice.
-        </p>
-      </footer>
-    </div>
+        {/* Footer */}
+        <footer className="footer">
+          <span className="footer-text">
+            ResearchIQ — Built with LangGraph, Groq (LLaMA 3.3 70B), Tavily, Alpha Vantage & Next.js 14
+          </span>
+          <span className="footer-text">
+            For informational purposes only — not financial advice. Always conduct independent due diligence.
+          </span>
+        </footer>
+      </div>
+    </>
   );
 }

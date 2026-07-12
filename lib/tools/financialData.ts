@@ -264,20 +264,33 @@ async function resolveTickerSymbol(
     return { match: null };
   }
 
-  // Parse the first (best) match
-  const best = bestMatches[0];
-  const matchScore = safeParseNumber(best["9. matchScore"]) ?? 0;
+  // Parse the first (best) match — but ONLY accept US-listed Equity
+  // Alpha Vantage returns ETFs, REITs, and foreign ADRs ahead of the
+  // common US stock for well-known names (e.g. "Apple" → APLE REIT).
+  // We scan all bestMatches and pick the first US Equity with score ≥ 0.5.
+  let match: SymbolMatch | null = null;
 
-  const match: SymbolMatch = {
-    symbol: (best["1. symbol"] || "").trim(),
-    name: (best["2. name"] || "").trim(),
-    type: (best["3. type"] || "").trim(),
-    region: (best["4. region"] || "").trim(),
-    matchScore,
-  };
+  for (const candidate of bestMatches) {
+    const score  = safeParseNumber(candidate["9. matchScore"]) ?? 0;
+    const region = (candidate["4. region"] || "").trim();
+    const type   = (candidate["3. type"]   || "").trim();
 
-  // Only accept confident matches (score >= 0.5)
-  if (match.symbol && match.matchScore >= 0.5) {
+    // Skip non-US or non-equity results (ETF, REIT, Mutual Fund, etc.)
+    if (region !== "United States" || type !== "Equity") continue;
+
+    if (score >= 0.5) {
+      match = {
+        symbol:     (candidate["1. symbol"] || "").trim(),
+        name:       (candidate["2. name"]   || "").trim(),
+        type,
+        region,
+        matchScore: score,
+      };
+      break;
+    }
+  }
+
+  if (match) {
     console.log(
       `[Ticker Resolution] "${companyNameOrTicker}" → ${match.symbol} ` +
         `(${match.name}, score: ${match.matchScore})`
@@ -286,8 +299,8 @@ async function resolveTickerSymbol(
   }
 
   console.log(
-    `[Ticker Resolution] No confident match for "${companyNameOrTicker}" ` +
-      `(best: ${match.symbol}, score: ${match.matchScore})`
+    `[Ticker Resolution] No confident US-Equity match for "${companyNameOrTicker}" ` +
+      `— treating as private/unlisted.`
   );
   return { match: null };
 }
