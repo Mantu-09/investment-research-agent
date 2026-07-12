@@ -7,7 +7,7 @@ import { AgentState, type AgentStateType, type InvestmentDecision } from "./stat
 import { webResearch } from "../tools/webResearch";
 import { fetchFinancialData } from "../tools/financialData";
 import { fetchNewsFindings } from "../tools/newsFindings";
-import { withRetry, sleep } from "../utils/retry";
+import { sleep } from "../utils/retry";
 
 // ---------------------------------------------------------------------------
 // Investment Research Agent — Graph Definition (Phase 3)
